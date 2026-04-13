@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-bg: #f8fafc;
+    --color-surface: #ffffff;
+    --color-surface-2: #f1f5f9;
+    --color-text: #0f172a;
+    --color-text-secondary: #64748b;
+    --color-border: #e2e8f0;
+    --color-primary: #3b82f6;
+    --color-primary-dark: #2563eb;
+    --color-success: #22c55e;
+    --color-danger: #ef4444;
+    --color-warning: #f59e0b;
+  }
+
+  .dark {
+    --color-bg: #0f172a;
+    --color-surface: #1e293b;
+    --color-surface-2: #334155;
+    --color-text: #f1f5f9;
+    --color-text-secondary: #94a3b8;
+    --color-border: #334155;
+    --color-primary: #3b82f6;
+    --color-primary-dark: #60a5fa;
+    --color-success: #22c55e;
+    --color-danger: #ef4444;
+    --color-warning: #f59e0b;
+  }
+
+  body {
+    @apply bg-[var(--color-bg)] text-[var(--color-text)] transition-colors duration-200;
+    font-family: 'JetBrains Mono', monospace;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)] p-4;
+  }
+
+  .btn-primary {
+    @apply bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-150 active:scale-95;
+  }
+
+  .btn-secondary {
+    @apply bg-[var(--color-surface-2)] text-[var(--color-text)] font-semibold py-3 px-6 rounded-xl transition-colors duration-150 active:scale-95 border border-[var(--color-border)];
+  }
+
+  .input-field {
+    @apply w-full bg-[var(--color-surface-2)] text-[var(--color-text)] border border-[var(--color-border)] rounded-xl px-4 py-3 outline-none transition-all duration-150;
+  }
+
+  .input-field:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  }
+
+  .badge-pending {
+    @apply bg-red-500/15 text-red-500 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  }
+
+  .badge-paid {
+    @apply bg-green-500/15 text-green-500 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  }
+
+  .badge-overdue {
+    @apply bg-orange-500/15 text-orange-500 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  }
+}
