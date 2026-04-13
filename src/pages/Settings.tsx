@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Sun, Moon, Plus, Trash2, DollarSign, PiggyBank, Download, Upload, Database, CheckCircle2, AlertTriangle, Smartphone } from 'lucide-react';
+import { Sun, Moon, Plus, Trash2, DollarSign, PiggyBank, Download, Upload, Database, CheckCircle2, AlertTriangle, Smartphone, ShieldAlert, X } from 'lucide-react';
 import { db, getOrCreateSettings, ensureMonthlyConfig } from '../db/database';
 import { exportBackup, downloadBackup, importBackup } from '../db/backup';
 import { formatCurrency, getMonthName } from '../utils/formatters';
@@ -30,6 +30,9 @@ export function SettingsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
+  const [deleteModal, setDeleteModal] = useState<{ label: string; confirmText: string; action: () => Promise<void> } | null>(null);
+  const [deleteInput, setDeleteInput] = useState('');
+  const [deleteMessage, setDeleteMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     // Check if already installed as standalone
@@ -446,6 +449,155 @@ export function SettingsPage() {
           </p>
         )}
       </div>
+
+      {/* Danger Zone - Delete Data */}
+      <div className="card border border-red-500/30">
+        <div className="flex items-center gap-2 mb-3">
+          <ShieldAlert size={18} className="text-red-500" />
+          <h3 className="font-semibold text-red-500">Zona de Perigo</h3>
+        </div>
+        <p className="text-xs text-[var(--color-text-secondary)] mb-4">
+          Exclua dados do app. Cada ação exige confirmação por digitação. Esta ação é irreversível.
+        </p>
+
+        {deleteMessage && (
+          <div className={`flex items-center gap-2 p-3 rounded-xl mb-4 ${
+            deleteMessage.type === 'success' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
+          }`}>
+            {deleteMessage.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+            <p className="text-sm">{deleteMessage.text}</p>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {[
+            {
+              label: 'Excluir todas as contas',
+              confirmText: 'excluir contas',
+              action: async () => { await db.bills.clear(); },
+              description: 'Remove todas as contas mensais de todos os meses.',
+            },
+            {
+              label: 'Excluir dívidas recorrentes',
+              confirmText: 'excluir dividas',
+              action: async () => { await db.recurringDebts.clear(); },
+              description: 'Remove todas as dívidas recorrentes e suas parcelas.',
+            },
+            {
+              label: 'Excluir rendas e fundos',
+              confirmText: 'excluir rendas',
+              action: async () => {
+                await db.incomeSources.clear();
+                await db.extraFunds.clear();
+              },
+              description: 'Remove todas as fontes de renda e fundos extras.',
+            },
+            {
+              label: 'Excluir prioridades',
+              confirmText: 'excluir prioridades',
+              action: async () => { await db.priorities.clear(); },
+              description: 'Remove todas as prioridades. Novas serão criadas como padrão.',
+            },
+            {
+              label: 'Excluir TUDO',
+              confirmText: 'excluir tudo permanentemente',
+              action: async () => {
+                await db.bills.clear();
+                await db.recurringDebts.clear();
+                await db.extraFunds.clear();
+                await db.monthlyConfigs.clear();
+                await db.incomeSources.clear();
+                await db.priorities.clear();
+                await db.settings.clear();
+              },
+              description: 'Remove absolutamente todos os dados do app.',
+            },
+          ].map((item) => (
+            <div key={item.confirmText} className="flex items-center justify-between py-2.5 border-b border-[var(--color-border)] last:border-b-0">
+              <div className="flex-1 min-w-0 mr-3">
+                <p className="text-sm font-medium">{item.label}</p>
+                <p className="text-xs text-[var(--color-text-secondary)]">{item.description}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setDeleteModal({ label: item.label, confirmText: item.confirmText, action: item.action });
+                  setDeleteInput('');
+                }}
+                className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/10 text-red-500 text-xs font-semibold hover:bg-red-500/20 transition-colors"
+              >
+                <Trash2 size={14} />
+                Excluir
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4" onClick={() => setDeleteModal(null)}>
+          <div className="bg-[var(--color-surface)] rounded-2xl p-5 w-full max-w-sm space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldAlert size={20} className="text-red-500" />
+                <h3 className="font-semibold text-red-500">{deleteModal.label}</h3>
+              </div>
+              <button onClick={() => setDeleteModal(null)} className="p-1 rounded-lg hover:bg-[var(--color-surface-2)]">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+              <p className="text-xs text-red-400 leading-relaxed">
+                Esta ação é <strong>permanente e irreversível</strong>. Os dados excluídos não poderão ser recuperados (a menos que você tenha um backup).
+              </p>
+            </div>
+
+            <div>
+              <p className="text-sm text-[var(--color-text-secondary)] mb-2">
+                Para confirmar, digite <strong className="text-[var(--color-text)] select-all">{deleteModal.confirmText}</strong> abaixo:
+              </p>
+              <input
+                type="text"
+                value={deleteInput}
+                onChange={(e) => setDeleteInput(e.target.value)}
+                placeholder={deleteModal.confirmText}
+                className="input-field w-full"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteModal(null)}
+                className="flex-1 py-2.5 rounded-xl bg-[var(--color-surface-2)] text-sm font-medium"
+              >
+                Cancelar
+              </button>
+              <button
+                disabled={deleteInput !== deleteModal.confirmText}
+                onClick={async () => {
+                  try {
+                    await deleteModal.action();
+                    setDeleteMessage({ type: 'success', text: `${deleteModal.label} — concluído com sucesso.` });
+                    setDeleteModal(null);
+                    setTimeout(() => setDeleteMessage(null), 4000);
+                    if (deleteModal.confirmText === 'excluir tudo permanentemente') {
+                      setTimeout(() => window.location.reload(), 1500);
+                    }
+                  } catch {
+                    setDeleteMessage({ type: 'error', text: 'Erro ao excluir dados.' });
+                    setDeleteModal(null);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-red-700 transition-colors"
+              >
+                Excluir permanentemente
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
