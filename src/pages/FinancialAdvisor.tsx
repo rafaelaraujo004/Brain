@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Brain,
@@ -12,12 +12,10 @@ import {
   ChevronDown,
   ChevronUp,
   Settings2,
-  Plus,
-  X,
 } from 'lucide-react';
-import { db, getOrCreateSettings, ensureDefaultPriorities } from '../db/database';
+import { db, getOrCreateSettings } from '../db/database';
 import { formatCurrency, getMonthName } from '../utils/formatters';
-import type { RecurringDebt, PriorityItem, PriorityLevel } from '../types';
+import type { RecurringDebt, PriorityLevel } from '../types';
 import { HelpButton } from '../components/HelpModal';
 
 interface Suggestion {
@@ -38,6 +36,14 @@ interface SimItem {
   selected: boolean;
 }
 
+interface PriorityEntry {
+  key: string;
+  description: string;
+  level: PriorityLevel;
+  type: 'bill' | 'recurring';
+  value: number;
+}
+
 const LEVEL_SCORE: Record<PriorityLevel, number> = { alta: 10, media: 5, baixa: 2 };
 const LEVEL_COLORS: Record<PriorityLevel, { bg: string; text: string; label: string }> = {
   alta: { bg: 'bg-red-500/15', text: 'text-red-500', label: 'Alta' },
@@ -45,26 +51,6 @@ const LEVEL_COLORS: Record<PriorityLevel, { bg: string; text: string; label: str
   baixa: { bg: 'bg-blue-500/15', text: 'text-blue-500', label: 'Baixa' },
 };
 const LEVEL_CYCLE: PriorityLevel[] = ['baixa', 'media', 'alta'];
-
-function getPriorityScore(description: string, priorities: PriorityItem[]): number {
-  const lower = description.toLowerCase();
-  for (const p of priorities) {
-    if (lower.includes(p.keyword)) {
-      return LEVEL_SCORE[p.level];
-    }
-  }
-  return 0;
-}
-
-function getPriorityLevel(description: string, priorities: PriorityItem[]): PriorityLevel | null {
-  const lower = description.toLowerCase();
-  for (const p of priorities) {
-    if (lower.includes(p.keyword)) {
-      return p.level;
-    }
-  }
-  return null;
-}
 
 function getRecurringForCurrentMonth(debt: RecurringDebt, month: number, year: number) {
   const monthsSinceStart = (year - debt.startYear) * 12 + (month - debt.startMonth);
@@ -85,11 +71,6 @@ export function FinancialAdvisor() {
   const [manualSelections, setManualSelections] = useState<Set<string>>(new Set());
   const [simMode, setSimMode] = useState<'auto' | 'manual'>('auto');
   const [showPriorities, setShowPriorities] = useState(false);
-  const [newKeyword, setNewKeyword] = useState('');
-
-  useEffect(() => {
-    ensureDefaultPriorities();
-  }, []);
 
   const priorities = useLiveQuery(
     () => db.priorities.toArray(),
@@ -129,19 +110,27 @@ export function FinancialAdvisor() {
     return salary + extra + income;
   }, [monthlyConfig, settings, extraFunds, incomeSources]);
 
+  // Priority map for lookups
+  const prioMap = useMemo(() => new Map((priorities ?? []).map((p) => [p.keyword, p.level])), [priorities]);
+
   // Build pending items for simulation
   const pendingItems = useMemo((): SimItem[] => {
-    if (!priorities) return [];
     const items: SimItem[] = [];
+
+    const getScore = (desc: string): number => {
+      const level = prioMap.get(desc.toLowerCase());
+      return level ? LEVEL_SCORE[level] : 0;
+    };
 
     bills?.forEach((b) => {
       if (b.status !== 'pending') return;
+      const baseDesc = b.originalDescription ?? b.description;
       items.push({
         id: `bill-${b.id}`,
         description: b.description,
         value: b.finalValue,
         dueDay: b.dueDay,
-        priority: getPriorityScore(b.description, priorities),
+        priority: getScore(baseDesc),
         type: 'bill',
         selected: false,
       });
@@ -150,7 +139,6 @@ export function FinancialAdvisor() {
     recurringDebts?.forEach((d) => {
       const info = getRecurringForCurrentMonth(d, month, year);
       if (!info || info.isPaid) return;
-      // Check if already linked as bill
       const hasLinkedBill = bills?.some((b) => b.recurringDebtId === d.id);
       if (hasLinkedBill) return;
 
@@ -159,18 +147,17 @@ export function FinancialAdvisor() {
         description: `${d.description} (${info.installmentNumber}/${d.totalInstallments})`,
         value: d.installmentValue,
         dueDay: d.dueDay,
-        priority: getPriorityScore(d.description, priorities),
+        priority: getScore(d.description),
         type: 'recurring',
         selected: false,
       });
     });
 
-    // Sort by priority (high first), then by due day (earliest first)
     return items.sort((a, b) => {
       if (b.priority !== a.priority) return b.priority - a.priority;
       return a.dueDay - b.dueDay;
     });
-  }, [bills, recurringDebts, month, year, priorities]);
+  }, [bills, recurringDebts, month, year, prioMap]);
 
   // Smart suggestions
   const suggestions = useMemo((): Suggestion[] => {
@@ -248,7 +235,11 @@ export function FinancialAdvisor() {
     }
 
     // Tip: high-priority bills unpaid
-    const highPriorityUnpaid = pendingBills.filter((b) => getPriorityScore(b.description, priorities ?? []) > 5);
+    const highPriorityUnpaid = pendingBills.filter((b) => {
+      const base = (b.originalDescription ?? b.description).toLowerCase();
+      const level = prioMap.get(base);
+      return level === 'alta';
+    });
     if (highPriorityUnpaid.length > 0) {
       tips.push({
         type: 'tip',
@@ -293,7 +284,7 @@ export function FinancialAdvisor() {
     }
 
     return tips.sort((a, b) => b.priority - a.priority);
-  }, [bills, recurringDebts, allBills, totalIncome, currentDay, month, year, priorities]);
+  }, [bills, recurringDebts, allBills, totalIncome, currentDay, month, year, prioMap]);
 
   // Simulation logic
   const budget = parseFloat(budgetInput.replace(',', '.')) || 0;
@@ -343,22 +334,65 @@ export function FinancialAdvisor() {
     });
   };
 
-  const addPriority = useCallback(async () => {
-    const keyword = newKeyword.trim().toLowerCase();
-    if (!keyword || !priorities) return;
-    if (priorities.some((p) => p.keyword === keyword)) return;
-    await db.priorities.add({ keyword, level: 'media' });
-    setNewKeyword('');
-  }, [newKeyword, priorities]);
+  // Build unique list of bills + recurring debts for priority editor
+  const priorityEntries = useMemo((): PriorityEntry[] => {
+    const entries: PriorityEntry[] = [];
+    const seen = new Set<string>();
 
-  const removePriority = useCallback(async (id: number) => {
-    await db.priorities.delete(id);
-  }, []);
+    // Get unique bill descriptions (use originalDescription to avoid duplicates from carry-over)
+    bills?.forEach((b) => {
+      if (b.status === 'skipped') return;
+      const baseDesc = b.originalDescription ?? b.description;
+      const key = baseDesc.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      entries.push({
+        key,
+        description: baseDesc,
+        level: prioMap.get(key) ?? 'media',
+        type: 'bill',
+        value: b.finalValue,
+      });
+    });
 
-  const cyclePriorityLevel = useCallback(async (item: PriorityItem) => {
-    const currentIdx = LEVEL_CYCLE.indexOf(item.level);
-    const nextLevel = LEVEL_CYCLE[(currentIdx + 1) % LEVEL_CYCLE.length];
-    await db.priorities.update(item.id!, { level: nextLevel });
+    // Get unique recurring debts
+    recurringDebts?.forEach((d) => {
+      const key = d.description.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      entries.push({
+        key,
+        description: d.description,
+        level: prioMap.get(key) ?? 'media',
+        type: 'recurring',
+        value: d.installmentValue,
+      });
+    });
+
+    // Also show priorities that exist in DB but not in current bills (from other months)
+    priorities?.forEach((p) => {
+      if (seen.has(p.keyword)) return;
+      seen.add(p.keyword);
+      entries.push({
+        key: p.keyword,
+        description: p.keyword,
+        level: p.level,
+        type: 'bill',
+        value: 0,
+      });
+    });
+
+    return entries.sort((a, b) => LEVEL_SCORE[b.level] - LEVEL_SCORE[a.level]);
+  }, [bills, recurringDebts, prioMap]);
+
+  const cyclePriority = useCallback(async (key: string, currentLevel: PriorityLevel) => {
+    const nextLevel = LEVEL_CYCLE[(LEVEL_CYCLE.indexOf(currentLevel) + 1) % LEVEL_CYCLE.length];
+    const existing = await db.priorities.where('keyword').equals(key).first();
+    if (existing) {
+      await db.priorities.update(existing.id!, { level: nextLevel });
+    } else {
+      await db.priorities.add({ keyword: key, level: nextLevel });
+    }
   }, []);
 
   return (
@@ -437,62 +471,42 @@ export function FinancialAdvisor() {
 
         {showPriorities && (
           <div className="space-y-3">
-            <div className="card space-y-3">
+            <div className="card">
               <p className="text-xs text-[var(--color-text-secondary)]">
-                Toque no nível para alternar entre Alta, Média e Baixa. Adicione palavras-chave para identificar contas.
+                Toque no nível de cada conta para alternar entre Alta, Média e Baixa. A prioridade é usada no simulador automático.
               </p>
-
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Ex: aluguel, internet..."
-                  value={newKeyword}
-                  onChange={(e) => setNewKeyword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && addPriority()}
-                  className="input-field flex-1"
-                />
-                <button
-                  onClick={addPriority}
-                  disabled={!newKeyword.trim()}
-                  className="bg-[var(--color-primary)] text-white p-2.5 rounded-xl disabled:opacity-40"
-                >
-                  <Plus size={18} />
-                </button>
-              </div>
             </div>
 
-            {priorities && priorities.length > 0 && (
+            {priorityEntries.length > 0 ? (
               <div className="space-y-1">
-                {priorities.map((p) => {
-                  const colors = LEVEL_COLORS[p.level];
+                {priorityEntries.map((entry) => {
+                  const colors = LEVEL_COLORS[entry.level];
                   return (
                     <div
-                      key={p.id}
+                      key={entry.key}
                       className="card flex items-center gap-3 py-2.5"
                     >
-                      <span className="text-sm flex-1 truncate">{p.keyword}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{entry.description}</p>
+                        <p className="text-xs text-[var(--color-text-secondary)]">
+                          {entry.type === 'recurring' ? 'Dívida recorrente' : 'Conta'}
+                          {entry.value > 0 && ` · ${formatCurrency(entry.value)}`}
+                        </p>
+                      </div>
                       <button
-                        onClick={() => cyclePriorityLevel(p)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold ${colors.bg} ${colors.text} transition-colors`}
+                        onClick={() => cyclePriority(entry.key, entry.level)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold ${colors.bg} ${colors.text} transition-colors min-w-[60px] text-center`}
                       >
                         {colors.label}
-                      </button>
-                      <button
-                        onClick={() => removePriority(p.id!)}
-                        className="p-1 rounded-lg hover:bg-red-500/10 text-red-500"
-                      >
-                        <X size={14} />
                       </button>
                     </div>
                   );
                 })}
               </div>
-            )}
-
-            {priorities && priorities.length === 0 && (
+            ) : (
               <div className="card text-center py-4">
                 <p className="text-xs text-[var(--color-text-secondary)]">
-                  Nenhuma prioridade definida. Adicione palavras-chave acima.
+                  Nenhuma conta ou dívida cadastrada ainda.
                 </p>
               </div>
             )}
@@ -586,8 +600,9 @@ export function FinancialAdvisor() {
                           <p className="text-sm font-medium truncate">{item.description}</p>
                           <div className="flex items-center gap-2 mt-0.5">
                             <span className="text-xs text-[var(--color-text-secondary)]">Dia {item.dueDay}</span>
-                            {item.priority > 0 && (() => {
-                              const level = getPriorityLevel(item.description, priorities ?? []);
+                            {(() => {
+                              const baseKey = item.description.replace(/\s*\[ATRASADA.*\]/, '').replace(/\s*\(parcela.*\)/i, '').trim();
+                              const level = prioMap.get(baseKey);
                               if (!level) return null;
                               const colors = LEVEL_COLORS[level];
                               return (

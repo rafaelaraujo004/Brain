@@ -78,26 +78,6 @@ class AppDatabase extends Dexie {
 
 export const db = new AppDatabase();
 
-const DEFAULT_PRIORITIES: { keyword: string; level: 'alta' | 'media' | 'baixa' }[] = [
-  { keyword: 'casa construtora', level: 'alta' },
-  { keyword: 'casa habitação', level: 'alta' },
-  { keyword: 'habitação', level: 'alta' },
-  { keyword: 'carro', level: 'alta' },
-  { keyword: 'faculdade', level: 'alta' },
-  { keyword: 'cartão nubank', level: 'media' },
-  { keyword: 'nubank', level: 'media' },
-  { keyword: 'síndico', level: 'media' },
-  { keyword: 'energia', level: 'media' },
-  { keyword: 'mercado pago', level: 'baixa' },
-  { keyword: 'neon', level: 'baixa' },
-];
-
-export async function ensureDefaultPriorities(): Promise<void> {
-  const count = await db.priorities.count();
-  if (count > 0) return;
-  await db.priorities.bulkAdd(DEFAULT_PRIORITIES);
-}
-
 export async function getOrCreateSettings(): Promise<AppSettings> {
   const existing = await db.settings.toCollection().first();
   if (existing) return existing;
@@ -163,7 +143,7 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
     if (alreadyCarried) continue;
 
     const baseDescription = prevBill.originalDescription ?? prevBill.description;
-    const carryDescription = `Parcela de ${baseDescription} - ${getMonthName(prev.month)}`;
+    const carryDescription = `${baseDescription} [ATRASADA - ${getMonthName(prev.month)}]`;
 
     newCarryOvers.push({
       description: carryDescription,
@@ -172,7 +152,7 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
       finalValue: prevBill.finalValue,
       status: 'pending',
       dueDay: prevBill.dueDay,
-      observation: prevBill.observation || 'Conta pendente do mês anterior',
+      observation: `Conta atrasada do mês de ${getMonthName(prev.month)}`,
       month,
       year,
       carriedFromBillId: prevBill.id,
@@ -206,7 +186,7 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
   if (existing) return;
 
   const baseDescription = bill.originalDescription ?? bill.description;
-  const carryDescription = `Parcela de ${baseDescription} - ${getMonthName(bill.month)}`;
+  const carryDescription = `${baseDescription} [ATRASADA - ${getMonthName(bill.month)}]`;
 
   await db.bills.add({
     description: carryDescription,
@@ -215,7 +195,7 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
     finalValue: bill.finalValue,
     status: 'pending',
     dueDay: bill.dueDay,
-    observation: bill.observation || 'Conta adiada do mês anterior',
+    observation: `Conta atrasada do mês de ${getMonthName(bill.month)}`,
     month: next.month,
     year: next.year,
     carriedFromBillId: bill.id,
