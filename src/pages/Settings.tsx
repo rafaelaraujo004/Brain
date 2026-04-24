@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Sun, Moon, Plus, Trash2, DollarSign, PiggyBank, Download, Upload, Database, CheckCircle2, AlertTriangle, Smartphone, ShieldAlert, X } from 'lucide-react';
+import { Sun, Moon, Plus, Trash2, DollarSign, PiggyBank, Download, Upload, Database, CheckCircle2, AlertTriangle, Smartphone, ShieldAlert, X, LogIn, LogOut } from 'lucide-react';
 import { db, getOrCreateSettings, ensureMonthlyConfig } from '../db/database';
 import { exportBackup, downloadBackup, importBackup } from '../db/backup';
 import { formatCurrency, getMonthName } from '../utils/formatters';
@@ -9,6 +9,7 @@ import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import type { AppSettings } from '../types';
 import { HelpButton } from '../components/HelpModal';
+import { useAuth } from '../contexts/AuthContext';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -17,6 +18,7 @@ interface BeforeInstallPromptEvent extends Event {
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
+  const { user, signInWithGoogle, logout, redirecting, authError } = useAuth();
   const { month, year, goToPrev, goToNext } = useMonthNavigation();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [salaryInput, setSalaryInput] = useState('');
@@ -33,6 +35,8 @@ export function SettingsPage() {
   const [deleteModal, setDeleteModal] = useState<{ label: string; confirmText: string; action: () => Promise<void> } | null>(null);
   const [deleteInput, setDeleteInput] = useState('');
   const [deleteMessage, setDeleteMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [authActionLoading, setAuthActionLoading] = useState(false);
+  const [authActionMessage, setAuthActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     // Check if already installed as standalone
@@ -123,6 +127,37 @@ export function SettingsPage() {
   const totalIncomeSources = incomeSources?.reduce((sum, i) => sum + i.value, 0) ?? 0;
   const currentSalary = parseFloat(monthlySalary.replace(',', '.')) || 0;
   const totalIncomeForMonth = currentSalary + totalIncomeSources + totalExtra;
+  const displayName = user?.displayName?.trim() || 'Usuário';
+  const displayEmail = user?.email?.trim() || 'Sem e-mail disponível';
+  const photoUrl = user?.photoURL || null;
+  const avatarFallback = (displayName[0] || displayEmail[0] || 'U').toUpperCase();
+
+  const handleSignIn = async () => {
+    setAuthActionMessage(null);
+    setAuthActionLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Não foi possível iniciar o login.';
+      setAuthActionMessage({ type: 'error', text: message });
+    } finally {
+      setAuthActionLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setAuthActionMessage(null);
+    setAuthActionLoading(true);
+    try {
+      await logout();
+      setAuthActionMessage({ type: 'success', text: 'Logout realizado com sucesso.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Não foi possível sair da conta.';
+      setAuthActionMessage({ type: 'error', text: message });
+    } finally {
+      setAuthActionLoading(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -139,6 +174,63 @@ export function SettingsPage() {
             { icon: '💾', title: 'Backup', description: 'Exporte seus dados como arquivo JSON para guardar ou restaure um backup anterior.' },
           ]}
         />
+      </div>
+
+      <div className="card">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <h3 className="font-semibold">Conta</h3>
+          <span className={`text-xs px-2.5 py-1 rounded-full ${user ? 'bg-green-500/15 text-green-500' : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]'}`}>
+            {user ? 'Conectado' : 'Desconectado'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] mb-3">
+          {photoUrl ? (
+            <img
+              src={photoUrl}
+              alt="Foto do perfil"
+              className="w-12 h-12 rounded-full object-cover border border-[var(--color-border)]"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="w-12 h-12 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center font-semibold">
+              {avatarFallback}
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="text-sm font-semibold truncate">{displayName}</p>
+            <p className="text-xs text-[var(--color-text-secondary)] truncate">{displayEmail}</p>
+          </div>
+        </div>
+
+        {(authError || authActionMessage) && (
+          <div className={`flex items-center gap-2 p-3 rounded-xl mb-3 ${(authActionMessage?.type === 'success') ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
+            {authActionMessage?.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+            <p className="text-sm">{authActionMessage?.text || authError}</p>
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          {!user ? (
+            <button
+              onClick={handleSignIn}
+              disabled={authActionLoading || redirecting}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[var(--color-primary)] text-white font-medium text-sm hover:opacity-90 transition-opacity disabled:opacity-60"
+            >
+              <LogIn size={18} />
+              {redirecting ? 'Redirecionando...' : authActionLoading ? 'Entrando...' : 'Entrar com Google'}
+            </button>
+          ) : (
+            <button
+              onClick={handleLogout}
+              disabled={authActionLoading}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-red-500/10 text-red-500 font-medium text-sm hover:bg-red-500/20 transition-colors disabled:opacity-60"
+            >
+              <LogOut size={18} />
+              {authActionLoading ? 'Saindo...' : 'Sair da conta'}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="md:grid md:grid-cols-2 md:gap-6 space-y-6 md:space-y-0">
