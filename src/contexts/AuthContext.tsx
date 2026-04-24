@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, type User } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, type User } from 'firebase/auth';
 import { auth } from '../db/firebase';
 import { initializeFirebaseSync, resetFirebaseSync } from '../db/database';
 
@@ -26,14 +26,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Handle redirect result after Google login
-    getRedirectResult(auth).catch((err: unknown) => {
-      if (err instanceof Error) {
-        setAuthError(err.message);
-      }
-      setRedirecting(false);
-    });
-
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
       setLoading(false);
@@ -49,10 +41,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signInWithGoogle() {
     if (!auth) return;
-    const provider = new GoogleAuthProvider();
     setAuthError(null);
     setRedirecting(true);
-    await signInWithRedirect(auth, provider);
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      await signInWithPopup(auth, provider);
+    } finally {
+      setRedirecting(false);
+    }
   }
 
   async function logout() {
