@@ -29,8 +29,3 @@
     "vite-plugin-pwa": "^0.21.1"
   }
 }
-    "vite": "^6.0.3",
-    "vite-plugin-pwa": "^0.21.1"
-  }
-}
->>>>>>> af5fd38 (chore(deps): atualizar dependências e arquivos de build para integração Firebase e ambiente)
