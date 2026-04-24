@@ -41,13 +41,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let unsubscribe: (() => void) | undefined;
 
     // No mobile, getRedirectResult() processa o token do Google que voltou
-    // do redirect. Só depois assinamos onAuthStateChanged — assim o observer
-    // já enxerga o usuário autenticado e o PrivateRoute não redireciona para /login.
-    // A persistência via indexedDBLocalPersistence (configurada em firebase.ts)
-    // garante que o nonce/state do OAuth sobreviva à navegação no Safari iOS.
+    // do redirect. Setamos o usuário IMEDIATAMENTE quando receber o resultado
+    // para evitar o estado de loading longo que aparece como "tela preta".
     getRedirectResult(auth!)
       .then((result) => {
         if (result?.user) {
+          // Seta o usuário imediatamente — não espera pelo onAuthStateChanged
+          setUser(result.user);
+          setLoading(false);
+          setRedirecting(false);
           void initializeFirebaseSync(result.user.uid);
         }
       })
