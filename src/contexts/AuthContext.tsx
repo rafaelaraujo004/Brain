@@ -38,18 +38,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // loading só vira false quando AMBOS onAuthStateChanged e getRedirectResult resolverem
-    // Isso evita race condition: onAuthStateChanged dispara null antes do redirect ser processado
-    let authResolved = false;
-    let redirectResolved = false;
+    let unsubscribe: (() => void) | undefined;
 
-    function maybeSetLoaded() {
-      if (authResolved && redirectResolved) {
-        setLoading(false);
-      }
-    }
-
-    // Captura o resultado de um signInWithRedirect ao voltar à página
+    // Processa o resultado do redirect ANTES de assinar onAuthStateChanged.
+    // Isso garante que quando onAuthStateChanged disparar, o Firebase já
+    // processou o token do Google e o usuário estará autenticado corretamente.
     getRedirectResult(auth)
       .then((result) => {
         if (result?.user) {
@@ -61,23 +54,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthError('Erro ao fazer login. Tente novamente.');
       })
       .finally(() => {
-        redirectResolved = true;
-        maybeSetLoaded();
+        // Só começa a ouvir mudanças de auth após o redirect ter sido processado
+        unsubscribe = onAuthStateChanged(auth!, (firebaseUser) => {
+          setUser(firebaseUser);
+          setLoading(false);
+          setRedirecting(false);
+          if (firebaseUser) {
+            void initializeFirebaseSync(firebaseUser.uid);
+          } else {
+            resetFirebaseSync();
+          }
+        });
       });
 
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      setRedirecting(false);
-      if (firebaseUser) {
-        void initializeFirebaseSync(firebaseUser.uid);
-      } else {
-        resetFirebaseSync();
-      }
-      authResolved = true;
-      maybeSetLoaded();
-    });
-
-    return unsubscribe;
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   async function signInWithGoogle() {
