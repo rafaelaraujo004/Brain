@@ -1,6 +1,8 @@
 import Dexie, { type Table } from 'dexie';
 import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem } from '../types';
 import { getMonthName } from '../utils/formatters';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { firestore } from './firebase';
 
 class AppDatabase extends Dexie {
   bills!: Table<Bill>;
@@ -77,6 +79,239 @@ class AppDatabase extends Dexie {
 }
 
 export const db = new AppDatabase();
+
+interface CloudSnapshot {
+  version: number;
+  updatedAt: number;
+  bills: Bill[];
+  recurringDebts: RecurringDebt[];
+  extraFunds: ExtraFund[];
+  monthlyConfigs: MonthlyConfig[];
+  incomeSources: IncomeSource[];
+  settings: AppSettings[];
+  priorities: PriorityItem[];
+}
+
+const LOCAL_LAST_CHANGE_KEY = 'paguei_local_last_change';
+let currentUserId: string | null = null;
+
+function getCloudDocRef() {
+  if (!firestore || !currentUserId) return null;
+  return doc(firestore, 'users', currentUserId, 'data', 'snapshot');
+}
+
+let isApplyingCloudData = false;
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let syncInitializedPromise: Promise<void> | null = null;
+
+function markLocalChanged(timestamp = Date.now()): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(LOCAL_LAST_CHANGE_KEY, String(timestamp));
+}
+
+function getLocalLastChangedAt(): number {
+  if (typeof window === 'undefined') return 0;
+  const raw = window.localStorage.getItem(LOCAL_LAST_CHANGE_KEY);
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function buildLocalSnapshot(): Promise<CloudSnapshot> {
+  const [bills, recurringDebts, extraFunds, monthlyConfigs, incomeSources, settings, priorities] =
+    await Promise.all([
+      db.bills.toArray(),
+      db.recurringDebts.toArray(),
+      db.extraFunds.toArray(),
+      db.monthlyConfigs.toArray(),
+      db.incomeSources.toArray(),
+      db.settings.toArray(),
+      db.priorities.toArray(),
+    ]);
+
+  return {
+    version: 1,
+    updatedAt: Date.now(),
+    bills,
+    recurringDebts,
+    extraFunds,
+    monthlyConfigs,
+    incomeSources,
+    settings,
+    priorities,
+  };
+}
+
+async function pushLocalSnapshotToCloud(): Promise<void> {
+  const cloudDocRef = getCloudDocRef();
+  if (!cloudDocRef || isApplyingCloudData) return;
+
+  const snapshot = await buildLocalSnapshot();
+  await setDoc(cloudDocRef, snapshot, { merge: true });
+}
+
+function scheduleCloudSync(): void {
+  if (!getCloudDocRef() || isApplyingCloudData) return;
+
+  markLocalChanged();
+
+  if (syncTimer) {
+    clearTimeout(syncTimer);
+  }
+
+  syncTimer = setTimeout(() => {
+    void pushLocalSnapshotToCloud();
+  }, 800);
+}
+
+function normalizeArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function hasCloudData(snapshot: Partial<CloudSnapshot>): boolean {
+  return (
+    normalizeArray(snapshot.bills).length > 0 ||
+    normalizeArray(snapshot.recurringDebts).length > 0 ||
+    normalizeArray(snapshot.extraFunds).length > 0 ||
+    normalizeArray(snapshot.monthlyConfigs).length > 0 ||
+    normalizeArray(snapshot.incomeSources).length > 0 ||
+    normalizeArray(snapshot.settings).length > 0 ||
+    normalizeArray(snapshot.priorities).length > 0
+  );
+}
+
+async function getLocalItemCount(): Promise<number> {
+  const counts = await Promise.all([
+    db.bills.count(),
+    db.recurringDebts.count(),
+    db.extraFunds.count(),
+    db.monthlyConfigs.count(),
+    db.incomeSources.count(),
+    db.settings.count(),
+    db.priorities.count(),
+  ]);
+
+  return counts.reduce((sum, value) => sum + value, 0);
+}
+
+async function applyCloudSnapshotToLocal(snapshot: Partial<CloudSnapshot>): Promise<void> {
+  const bills = normalizeArray<Bill>(snapshot.bills);
+  const recurringDebts = normalizeArray<RecurringDebt>(snapshot.recurringDebts);
+  const extraFunds = normalizeArray<ExtraFund>(snapshot.extraFunds);
+  const monthlyConfigs = normalizeArray<MonthlyConfig>(snapshot.monthlyConfigs);
+  const incomeSources = normalizeArray<IncomeSource>(snapshot.incomeSources);
+  const settings = normalizeArray<AppSettings>(snapshot.settings);
+  const priorities = normalizeArray<PriorityItem>(snapshot.priorities);
+
+  isApplyingCloudData = true;
+  try {
+    await db.transaction(
+      'rw',
+      [db.bills, db.recurringDebts, db.extraFunds, db.monthlyConfigs, db.incomeSources, db.settings, db.priorities],
+      async () => {
+        await db.bills.clear();
+        await db.recurringDebts.clear();
+        await db.extraFunds.clear();
+        await db.monthlyConfigs.clear();
+        await db.incomeSources.clear();
+        await db.settings.clear();
+        await db.priorities.clear();
+
+        if (bills.length > 0) await db.bills.bulkAdd(bills as never[]);
+        if (recurringDebts.length > 0) await db.recurringDebts.bulkAdd(recurringDebts as never[]);
+        if (extraFunds.length > 0) await db.extraFunds.bulkAdd(extraFunds as never[]);
+        if (monthlyConfigs.length > 0) await db.monthlyConfigs.bulkAdd(monthlyConfigs as never[]);
+        if (incomeSources.length > 0) await db.incomeSources.bulkAdd(incomeSources as never[]);
+        if (settings.length > 0) await db.settings.bulkAdd(settings as never[]);
+        if (priorities.length > 0) await db.priorities.bulkAdd(priorities as never[]);
+      }
+    );
+  } finally {
+    isApplyingCloudData = false;
+  }
+}
+
+function registerDexieSyncHooks(): void {
+  const globalState = globalThis as typeof globalThis & { __pagueiSyncHooksRegistered?: boolean };
+  if (globalState.__pagueiSyncHooksRegistered) return;
+
+  globalState.__pagueiSyncHooksRegistered = true;
+
+  const tables = [db.bills, db.recurringDebts, db.extraFunds, db.monthlyConfigs, db.incomeSources, db.settings, db.priorities];
+
+  for (const table of tables) {
+    table.hook('creating', () => {
+      scheduleCloudSync();
+    });
+    table.hook('updating', () => {
+      scheduleCloudSync();
+    });
+    table.hook('deleting', () => {
+      scheduleCloudSync();
+    });
+  }
+}
+
+export function resetFirebaseSync(): void {
+  currentUserId = null;
+  syncInitializedPromise = null;
+  if (syncTimer) {
+    clearTimeout(syncTimer);
+    syncTimer = null;
+  }
+}
+
+export async function initializeFirebaseSync(userId: string): Promise<void> {
+  if (currentUserId !== userId) {
+    resetFirebaseSync();
+    currentUserId = userId;
+  }
+
+  registerDexieSyncHooks();
+
+  const cloudDocRef = getCloudDocRef();
+  if (!cloudDocRef) return;
+  if (syncInitializedPromise) {
+    await syncInitializedPromise;
+    return;
+  }
+
+  syncInitializedPromise = (async () => {
+    try {
+      const cloudDoc = await getDoc(cloudDocRef);
+
+      if (!cloudDoc.exists()) {
+        await pushLocalSnapshotToCloud();
+        markLocalChanged();
+        return;
+      }
+
+      const cloudSnapshot = cloudDoc.data() as Partial<CloudSnapshot>;
+      const cloudUpdatedAt = typeof cloudSnapshot.updatedAt === 'number' ? cloudSnapshot.updatedAt : 0;
+      const localUpdatedAt = getLocalLastChangedAt();
+      const localCount = await getLocalItemCount();
+
+      if (localCount === 0 && hasCloudData(cloudSnapshot)) {
+        await applyCloudSnapshotToLocal(cloudSnapshot);
+        markLocalChanged(cloudUpdatedAt || Date.now());
+        return;
+      }
+
+      if (cloudUpdatedAt > localUpdatedAt) {
+        await applyCloudSnapshotToLocal(cloudSnapshot);
+        markLocalChanged(cloudUpdatedAt);
+        return;
+      }
+
+      await pushLocalSnapshotToCloud();
+      markLocalChanged();
+    } catch (error) {
+      console.error('Falha ao sincronizar dados com Firebase:', error);
+    }
+  })();
+
+  await syncInitializedPromise;
+}
+
 
 export async function getOrCreateSettings(): Promise<AppSettings> {
   const existing = await db.settings.toCollection().first();
