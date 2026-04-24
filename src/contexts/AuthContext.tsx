@@ -1,5 +1,13 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, type User } from 'firebase/auth';
+import {
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
+  signOut,
+  onAuthStateChanged,
+  type User,
+} from 'firebase/auth';
 import { auth } from '../db/firebase';
 import { initializeFirebaseSync, resetFirebaseSync } from '../db/database';
 
@@ -14,6 +22,10 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+function isMobile() {
+  return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,6 +37,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
+
+    // Captura o resultado de um signInWithRedirect ao voltar à página
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) {
+          void initializeFirebaseSync(result.user.uid);
+        }
+      })
+      .catch((err) => {
+        console.error('Redirect login error:', err);
+        setAuthError('Erro ao fazer login. Tente novamente.');
+      });
 
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
@@ -43,12 +67,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!auth) return;
     setAuthError(null);
     setRedirecting(true);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    // Mobile e Safari bloqueiam popups — usar redirect nesses casos
+    if (isMobile()) {
+      await signInWithRedirect(auth, provider);
+      return; // página vai redirecionar, resultado tratado no useEffect
+    }
+
     try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
       await signInWithPopup(auth, provider);
-    } finally {
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code;
+      // Se popup foi bloqueado pelo browser, cai para redirect
+      if (
+        code === 'auth/popup-blocked' ||
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/cancelled-popup-request'
+      ) {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
       setRedirecting(false);
+      setAuthError((err as Error).message ?? 'Erro ao fazer login.');
     }
   }
 
