@@ -1,6 +1,6 @@
 import { getApp, getApps, initializeApp, type FirebaseOptions } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
-import { initializeAuth, browserLocalPersistence, getAuth } from 'firebase/auth';
+import { initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, browserPopupRedirectResolver, getAuth } from 'firebase/auth';
 
 const firebaseConfig: FirebaseOptions = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -24,13 +24,18 @@ export const app = hasRequiredFirebaseConfig
 
 export const firestore = app ? getFirestore(app) : null;
 
-// initializeAuth com browserLocalPersistence força o Firebase a usar localStorage
-// para TUDO, incluindo o estado OAuth (nonce/state) salvo antes do popup/redirect.
-// Isso corrige o erro "sessionStorage is inaccessible" no Safari iOS.
+// initializeAuth com:
+// - indexedDBLocalPersistence: usa IndexedDB (não sessionStorage) para o estado OAuth
+//   — corrige o erro "sessionStorage is inaccessible" no Safari iOS
+// - browserLocalPersistence: fallback para localStorage
+// - browserPopupRedirectResolver: gerencia o fluxo popup usando o melhor storage disponível
 function createAuth() {
   if (!app) return null;
   try {
-    return initializeAuth(app, { persistence: browserLocalPersistence });
+    return initializeAuth(app, {
+      persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+      popupRedirectResolver: browserPopupRedirectResolver,
+    });
   } catch {
     // Já inicializado (HMR em dev ou módulo reutilizado)
     return getAuth(app);

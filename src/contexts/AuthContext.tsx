@@ -2,8 +2,6 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import {
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
   signOut,
   onAuthStateChanged,
   type User,
@@ -22,10 +20,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-function isMobile() {
-  return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -38,36 +32,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    let unsubscribe: (() => void) | undefined;
+    // Fluxo simples: apenas onAuthStateChanged.
+    // Não há redirect — signInWithPopup é usado em todos os dispositivos.
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      setLoading(false);
+      if (firebaseUser) {
+        void initializeFirebaseSync(firebaseUser.uid);
+      } else {
+        resetFirebaseSync();
+      }
+    });
 
-    // Processa o resultado do redirect ANTES de assinar onAuthStateChanged.
-    // Sem isso, onAuthStateChanged dispara null antes do token ser processado
-    // e o PrivateRoute redireciona o usuário de volta para /login.
-    getRedirectResult(auth)
-      .then((result) => {
-        if (result?.user) {
-          void initializeFirebaseSync(result.user.uid);
-        }
-      })
-      .catch((err: unknown) => {
-        console.error('[auth] getRedirectResult error:', err);
-      })
-      .finally(() => {
-        unsubscribe = onAuthStateChanged(auth!, (firebaseUser) => {
-          setUser(firebaseUser);
-          setLoading(false);
-          setRedirecting(false);
-          if (firebaseUser) {
-            void initializeFirebaseSync(firebaseUser.uid);
-          } else {
-            resetFirebaseSync();
-          }
-        });
-      });
-
-    return () => {
-      unsubscribe?.();
-    };
+    return () => unsubscribe();
   }, []);
 
   async function signInWithGoogle() {
@@ -77,23 +54,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
 
-    // Mobile usa redirect — mais confiável que popup em iOS/Android.
-    // O estado OAuth é salvo em localStorage (configurado em firebase.ts via
-    // initializeAuth + browserLocalPersistence), evitando o erro de sessionStorage.
-    if (isMobile()) {
-      try {
-        await signInWithRedirect(auth, provider);
-      } catch (err: unknown) {
-        setRedirecting(false);
-        setAuthError((err as Error).message ?? 'Erro ao fazer login.');
-      }
-      return;
-    }
-
+    // signInWithPopup em todos os devices.
+    // IMPORTANTE: sem nenhum `await` antes desta chamada — qualquer await
+    // quebra a cadeia de gesto do usuário e o Safari iOS bloqueia o window.open().
+    // A persistência (indexedDB) e o popupRedirectResolver já estão configurados
+    // em initializeAuth() no firebase.ts.
     try {
       await signInWithPopup(auth, provider);
     } catch (err: unknown) {
-      setAuthError((err as Error).message ?? 'Erro ao fazer login.');
+      const code = (err as { code?: string }).code;
+      // Erros esperados que não precisam de mensagem (usuário cancelou)
+      if (
+        code !== 'auth/popup-closed-by-user' &&
+        code !== 'auth/cancelled-popup-request'
+      ) {
+        setAuthError((err as Error).message ?? 'Erro ao fazer login.');
+      }
     } finally {
       setRedirecting(false);
     }
