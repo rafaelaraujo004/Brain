@@ -1,6 +1,7 @@
 import { getApp, getApps, initializeApp, type FirebaseOptions } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
-import { initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, browserPopupRedirectResolver, getAuth } from 'firebase/auth';
+import { getAuth } from 'firebase/auth';
+import { getStorage } from 'firebase/storage';
 
 const firebaseConfig: FirebaseOptions = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -23,26 +24,8 @@ export const app = hasRequiredFirebaseConfig
   : null;
 
 export const firestore = app ? getFirestore(app) : null;
-
-// initializeAuth com:
-// - indexedDBLocalPersistence: usa IndexedDB (não sessionStorage) para o estado OAuth
-//   — corrige o erro "sessionStorage is inaccessible" no Safari iOS
-// - browserLocalPersistence: fallback para localStorage
-// - browserPopupRedirectResolver: gerencia o fluxo popup usando o melhor storage disponível
-function createAuth() {
-  if (!app) return null;
-  try {
-    return initializeAuth(app, {
-      persistence: [indexedDBLocalPersistence, browserLocalPersistence],
-      popupRedirectResolver: browserPopupRedirectResolver,
-    });
-  } catch {
-    // Já inicializado (HMR em dev ou módulo reutilizado)
-    return getAuth(app);
-  }
-}
-
-export const auth = createAuth();
+export const auth = app ? getAuth(app) : null;
+export const storage = app ? getStorage(app) : null;
 
 if (!hasRequiredFirebaseConfig && import.meta.env.DEV) {
   console.warn('Firebase não configurado. Defina as variáveis VITE_FIREBASE_* para habilitar sync com Firestore.');

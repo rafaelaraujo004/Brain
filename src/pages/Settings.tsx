@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Sun, Moon, Plus, Trash2, DollarSign, PiggyBank, Download, Upload, Database, CheckCircle2, AlertTriangle, Smartphone, ShieldAlert, X, LogIn, LogOut } from 'lucide-react';
+import { Sun, Moon, Plus, Trash2, DollarSign, PiggyBank, Download, Upload, Database, CheckCircle2, AlertTriangle, Smartphone, ShieldAlert, X, LogOut, Pencil, Camera } from 'lucide-react';
 import { db, getOrCreateSettings, ensureMonthlyConfig } from '../db/database';
 import { exportBackup, downloadBackup, importBackup } from '../db/backup';
 import { formatCurrency, getMonthName } from '../utils/formatters';
@@ -18,7 +18,7 @@ interface BeforeInstallPromptEvent extends Event {
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
-  const { user, signInWithGoogle, logout, redirecting, authError } = useAuth();
+  const { user, logout, authError, updateUserProfile } = useAuth();
   const { month, year, goToPrev, goToNext } = useMonthNavigation();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [salaryInput, setSalaryInput] = useState('');
@@ -37,6 +37,10 @@ export function SettingsPage() {
   const [deleteMessage, setDeleteMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [authActionLoading, setAuthActionLoading] = useState(false);
   const [authActionMessage, setAuthActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [profileLoading, setProfileLoading] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     // Check if already installed as standalone
@@ -132,18 +136,42 @@ export function SettingsPage() {
   const photoUrl = user?.photoURL || null;
   const avatarFallback = (displayName[0] || displayEmail[0] || 'U').toUpperCase();
 
-  const handleSignIn = async () => {
-    setAuthActionMessage(null);
-    setAuthActionLoading(true);
-    try {
-      await signInWithGoogle();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Não foi possível iniciar o login.';
-      setAuthActionMessage({ type: 'error', text: message });
-    } finally {
-      setAuthActionLoading(false);
+  async function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setAuthActionMessage({ type: 'error', text: 'Imagem muito grande. Máximo 2MB.' });
+      return;
     }
-  };
+    setProfileLoading(true);
+    setAuthActionMessage(null);
+    try {
+      await updateUserProfile(displayName, file);
+      setAuthActionMessage({ type: 'success', text: 'Foto atualizada!' });
+    } catch {
+      setAuthActionMessage({ type: 'error', text: 'Erro ao atualizar foto.' });
+    } finally {
+      setProfileLoading(false);
+      e.target.value = '';
+    }
+  }
+
+  async function handleSaveName() {
+    if (!nameInput.trim()) return;
+    setProfileLoading(true);
+    setAuthActionMessage(null);
+    try {
+      await updateUserProfile(nameInput.trim());
+      setEditingName(false);
+      setAuthActionMessage({ type: 'success', text: 'Nome atualizado!' });
+    } catch {
+      setAuthActionMessage({ type: 'error', text: 'Erro ao atualizar nome.' });
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+
 
   const handleLogout = async () => {
     setAuthActionMessage(null);
@@ -185,20 +213,75 @@ export function SettingsPage() {
         </div>
 
         <div className="flex items-center gap-3 p-3 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] mb-3">
-          {photoUrl ? (
-            <img
-              src={photoUrl}
-              alt="Foto do perfil"
-              className="w-12 h-12 rounded-full object-cover border border-[var(--color-border)]"
-              referrerPolicy="no-referrer"
+          {/* Avatar com botão de trocar foto */}
+          <div className="relative flex-shrink-0">
+            {photoUrl ? (
+              <img
+                src={photoUrl}
+                alt="Foto do perfil"
+                className="w-14 h-14 rounded-full object-cover border border-[var(--color-border)]"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="w-14 h-14 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center font-bold text-lg">
+                {avatarFallback}
+              </div>
+            )}
+            {user && (
+              <button
+                onClick={() => photoInputRef.current?.click()}
+                disabled={profileLoading}
+                title="Trocar foto"
+                className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow hover:opacity-90 transition-opacity disabled:opacity-60"
+              >
+                <Camera size={12} />
+              </button>
+            )}
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handlePhotoChange}
             />
-          ) : (
-            <div className="w-12 h-12 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center font-semibold">
-              {avatarFallback}
-            </div>
-          )}
-          <div className="min-w-0">
-            <p className="text-sm font-semibold truncate">{displayName}</p>
+          </div>
+
+          {/* Nome editável */}
+          <div className="min-w-0 flex-1">
+            {editingName ? (
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveName(); if (e.key === 'Escape') setEditingName(false); }}
+                  className="flex-1 text-sm font-semibold bg-[var(--color-surface)] border border-[var(--color-primary)] rounded-lg px-2 py-1 focus:outline-none"
+                />
+                <button
+                  onClick={() => void handleSaveName()}
+                  disabled={profileLoading}
+                  className="text-xs text-[var(--color-primary)] font-semibold disabled:opacity-60"
+                >
+                  {profileLoading ? '...' : 'Salvar'}
+                </button>
+                <button onClick={() => setEditingName(false)} className="text-[var(--color-text-secondary)]">
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm font-semibold truncate">{displayName}</p>
+                {user && (
+                  <button
+                    onClick={() => { setNameInput(displayName); setEditingName(true); }}
+                    className="flex-shrink-0 text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors"
+                    title="Editar nome"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                )}
+              </div>
+            )}
             <p className="text-xs text-[var(--color-text-secondary)] truncate">{displayEmail}</p>
           </div>
         </div>
@@ -212,14 +295,7 @@ export function SettingsPage() {
 
         <div className="flex gap-3">
           {!user ? (
-            <button
-              onClick={handleSignIn}
-              disabled={authActionLoading || redirecting}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[var(--color-primary)] text-white font-medium text-sm hover:opacity-90 transition-opacity disabled:opacity-60"
-            >
-              <LogIn size={18} />
-              {redirecting ? 'Redirecionando...' : authActionLoading ? 'Entrando...' : 'Entrar com Google'}
-            </button>
+            <p className="text-sm text-[var(--color-text-secondary)] text-center py-2">Faça login para sincronizar seus dados.</p>
           ) : (
             <button
               onClick={handleLogout}
