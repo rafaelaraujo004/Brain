@@ -1,11 +1,14 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { PrivateRoute } from './components/PrivateRoute';
+import { AuthProvider } from './contexts/AuthContext';
 import { Dashboard } from './pages/Dashboard';
 import { MonthlyBills } from './pages/MonthlyBills';
 import { RecurringDebts } from './pages/RecurringDebts';
 import { MonthlyAnalysis } from './pages/MonthlyAnalysis';
 import { SettingsPage } from './pages/Settings';
 import { FinancialAdvisor } from './pages/FinancialAdvisor';
+import { LoginPage } from './pages/Login';
 import { useTheme } from './hooks/useTheme';
 
 export default function App() {
@@ -20,17 +23,26 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/contas" element={<MonthlyBills />} />
-          <Route path="/recorrentes" element={<RecurringDebts />} />
-          <Route path="/analise" element={<MonthlyAnalysis />} />
-          <Route path="/assistente" element={<FinancialAdvisor />} />
-          <Route path="/config" element={<SettingsPage />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            element={
+              <PrivateRoute>
+                <Layout />
+              </PrivateRoute>
+            }
+          >
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/contas" element={<MonthlyBills />} />
+            <Route path="/recorrentes" element={<RecurringDebts />} />
+            <Route path="/analise" element={<MonthlyAnalysis />} />
+            <Route path="/assistente" element={<FinancialAdvisor />} />
+            <Route path="/config" element={<SettingsPage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
