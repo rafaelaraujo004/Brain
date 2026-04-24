@@ -4,6 +4,8 @@ import {
   signInWithPopup,
   signOut,
   onAuthStateChanged,
+  setPersistence,
+  browserLocalPersistence,
   type User,
 } from 'firebase/auth';
 import { auth } from '../db/firebase';
@@ -53,6 +55,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     provider.setCustomParameters({ prompt: 'select_account' });
 
     try {
+      // Força localStorage para evitar erro de sessionStorage inacessível no Safari iOS
+      await setPersistence(auth, browserLocalPersistence);
       await signInWithPopup(auth, provider);
     } catch (err: unknown) {
       setAuthError((err as Error).message ?? 'Erro ao fazer login.');
