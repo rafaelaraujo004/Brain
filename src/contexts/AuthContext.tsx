@@ -38,6 +38,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // loading só vira false quando AMBOS onAuthStateChanged e getRedirectResult resolverem
+    // Isso evita race condition: onAuthStateChanged dispara null antes do redirect ser processado
+    let authResolved = false;
+    let redirectResolved = false;
+
+    function maybeSetLoaded() {
+      if (authResolved && redirectResolved) {
+        setLoading(false);
+      }
+    }
+
     // Captura o resultado de um signInWithRedirect ao voltar à página
     getRedirectResult(auth)
       .then((result) => {
@@ -48,18 +59,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .catch((err) => {
         console.error('Redirect login error:', err);
         setAuthError('Erro ao fazer login. Tente novamente.');
+      })
+      .finally(() => {
+        redirectResolved = true;
+        maybeSetLoaded();
       });
 
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
-      setLoading(false);
       setRedirecting(false);
       if (firebaseUser) {
         void initializeFirebaseSync(firebaseUser.uid);
       } else {
         resetFirebaseSync();
       }
+      authResolved = true;
+      maybeSetLoaded();
     });
+
     return unsubscribe;
   }, []);
 
