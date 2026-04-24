@@ -1,5 +1,14 @@
 {
   "rewrites": [
+    {
+      "source": "/__/auth/:path*",
+      "destination": "https://paguei-74ea9.firebaseapp.com/__/auth/:path*"
+    },
+    {
+      "source": "/__/firebase/:path*",
+      "destination": "https://paguei-74ea9.firebaseapp.com/__/firebase/:path*"
+    },
     { "source": "/(.*)", "destination": "/" }
   ]
 }
+
