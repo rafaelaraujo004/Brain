@@ -54,6 +54,7 @@ export interface AppSettings {
   id?: number;
   theme: 'dark' | 'light';
   defaultSalary: number;
+  avatarDataUrl?: string;
 }
 
 export type PriorityLevel = 'alta' | 'media' | 'baixa';
