@@ -8,8 +8,7 @@ import {
   updateProfile,
   type User,
 } from 'firebase/auth';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { auth, storage } from '../db/firebase';
+import { auth } from '../db/firebase';
 import { initializeFirebaseSync, resetFirebaseSync } from '../db/database';
 
 interface AuthContextType {
@@ -19,7 +18,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
-  updateUserProfile: (displayName: string, photoFile?: File | null) => Promise<void>;
+  updateUserProfile: (displayName: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -28,6 +27,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(!auth);
   const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -36,9 +36,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    let isMounted = true;
+
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (!isMounted) return;
       setUser(firebaseUser);
       setLoading(false);
+      setInitialized(true);
       if (firebaseUser) {
         void initializeFirebaseSync(firebaseUser.uid);
       } else {
@@ -46,7 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   async function signIn(email: string, password: string) {
@@ -77,17 +84,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await sendPasswordResetEmail(auth, email);
   }
 
-  async function updateUserProfile(displayName: string, photoFile?: File | null) {
+  async function updateUserProfile(displayName: string) {
     if (!auth?.currentUser) return;
-    let photoURL = auth.currentUser.photoURL ?? undefined;
-
-    if (photoFile && storage) {
-      const storageRef = ref(storage, `avatars/${auth.currentUser.uid}/${photoFile.name}`);
-      await uploadBytes(storageRef, photoFile);
-      photoURL = await getDownloadURL(storageRef);
-    }
-
-    await updateProfile(auth.currentUser, { displayName, photoURL });
+    await updateProfile(auth.currentUser, { displayName });
     // Força atualização do estado React (updateProfile muta o objeto mas não dispara onAuthStateChanged)
     setUser(Object.assign(Object.create(Object.getPrototypeOf(auth.currentUser)), auth.currentUser));
   }
@@ -95,6 +94,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function logout() {
     if (!auth) return;
     await signOut(auth);
+  }
+
+  if (!initialized) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)]">
+        <div className="w-8 h-8 border-4 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
   }
 
   return (
