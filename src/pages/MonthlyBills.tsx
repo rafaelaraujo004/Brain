@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Plus, Check, Undo2, Trash2, Edit3, X, RefreshCw, ArrowRight, Undo } from 'lucide-react';
 import { db, ensureCarryOverBillsForMonth, removeCarryOverForPaidBill, skipBillToNextMonth, skipRecurringToNextMonth, returnBillToOriginalMonth } from '../db/database';
-import { getMonthName from '../utils/formatters';
+import { formatCurrency, getMonthName } from '../utils/formatters';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import type { Bill, RecurringDebt } from '../types';
@@ -353,8 +353,8 @@ function BillItem({
             : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]'
         }`}
       >
-        {isPaid ? <Check size={20} /> : isSkipped ? <ArrowRight size={20} /> : isCarried ? <Undo size={16} /> : <Undo2 size={20} />}
-      </button>isCarried ? <Undo size={16} /> : 
+        {isPaid ? <Check size={20} /> : isSkipped ? <ArrowRight size={20} /> : <Undo2 size={20} />}
+      </button>
 
       <div className="flex-1 min-w-0">
         <p className={`text-sm font-medium truncate ${isPaid || isSkipped ? 'line-through' : ''}`}>
@@ -365,12 +365,7 @@ function BillItem({
             Dia {bill.dueDay}
           </span>
           {isCarried && bill.carriedFromMonth && (
-           isCarried && bill.carriedFromMonth && (
             <span className="text-xs font-medium text-orange-500">
-              ← {getMonthName(bill.carriedFromMonth)}/{bill.carriedFromYear}
-            </span>
-          )}
-          { <span className="text-xs font-medium text-orange-500">
               ← {getMonthName(bill.carriedFromMonth)}/{bill.carriedFromYear}
             </span>
           )}
@@ -379,10 +374,10 @@ function BillItem({
               {formatCurrency(bill.initialValue)}
             </span>
           )}
-          {bill.observation && (
-            <span className="text-xs text-[var(--color-warning)]">• {bill.observation}</span>
-          )}
         </div>
+        {bill.observation && (
+          <p className="text-xs text-[var(--color-warning)] mt-0.5 truncate">• {bill.observation}</p>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -391,7 +386,7 @@ function BillItem({
             {selected ? 'Selecionada' : 'Selecionar'}
           </span>
         ) : !showActions ? (
-          <>
+          <div className="flex flex-col items-end gap-1">
             <span className={`text-sm font-bold ${isPaid ? 'text-[var(--color-success)]' : isSkipped ? 'text-yellow-500' : isOverdue ? 'text-[var(--color-danger)]' : ''}`}>
               {formatCurrency(bill.finalValue)}
             </span>
@@ -406,7 +401,7 @@ function BillItem({
             ) : (
               <span className="badge-pending">Pendente</span>
             )}
-          </>
+          </div>
         ) : (
           <div className="flex gap-2">
             <button
