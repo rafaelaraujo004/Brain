@@ -16,6 +16,28 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
+function compressImageToDataUrl(file: File, size: number, quality: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject(new Error('Canvas não suportado'));
+      const side = Math.min(img.width, img.height);
+      const sx = (img.width - side) / 2;
+      const sy = (img.height - side) / 2;
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Falha ao carregar imagem')); };
+    img.src = url;
+  });
+}
+
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { user, logout, authError, updateUserProfile } = useAuth();
@@ -131,10 +153,6 @@ export function SettingsPage() {
   const totalIncomeSources = incomeSources?.reduce((sum, i) => sum + i.value, 0) ?? 0;
   const currentSalary = parseFloat(monthlySalary.replace(',', '.')) || 0;
   const totalIncomeForMonth = currentSalary + totalIncomeSources + totalExtra;
-  const displayName = user?.displayName?.trim() || 'Usuário';
-  const displayEmail = user?.email?.trim() || 'Sem e-mail disponível';
-  const photoUrl = user?.photoURL || null;
-  const avatarFallback = (displayName[0] || displayEmail[0] || 'U').toUpperCase();
 
   async function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -146,7 +164,10 @@ export function SettingsPage() {
     setProfileLoading(true);
     setAuthActionMessage(null);
     try {
-      await updateUserProfile(displayName, file);
+      const dataUrl = await compressImageToDataUrl(file, 128, 0.7);
+      const s = await getOrCreateSettings();
+      await db.settings.update(s.id!, { avatarDataUrl: dataUrl });
+      setSettings((prev) => prev ? { ...prev, avatarDataUrl: dataUrl } : prev);
       setAuthActionMessage({ type: 'success', text: 'Foto atualizada!' });
     } catch {
       setAuthActionMessage({ type: 'error', text: 'Erro ao atualizar foto.' });
@@ -170,18 +191,17 @@ export function SettingsPage() {
       setProfileLoading(false);
     }
   }
-
-
+  const displayName = user?.displayName?.trim() || 'Usuário';
+  const displayEmail = user?.email?.trim() || 'Sem e-mail disponível';
+  const photoUrl = settings?.avatarDataUrl || user?.photoURL || null;
+  const avatarFallback = (displayName[0] || displayEmail[0] || 'U').toUpperCase();
 
   const handleLogout = async () => {
-    setAuthActionMessage(null);
     setAuthActionLoading(true);
     try {
       await logout();
-      setAuthActionMessage({ type: 'success', text: 'Logout realizado com sucesso.' });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Não foi possível sair da conta.';
-      setAuthActionMessage({ type: 'error', text: message });
+    } catch {
+      setAuthActionMessage({ type: 'error', text: 'Erro ao sair.' });
     } finally {
       setAuthActionLoading(false);
     }
