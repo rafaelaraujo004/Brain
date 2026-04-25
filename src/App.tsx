@@ -23,8 +23,8 @@ export default function App() {
   }
 
   return (
-    <AuthProvider>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route
@@ -42,7 +42,7 @@ export default function App() {
             <Route path="/config" element={<SettingsPage />} />
           </Route>
         </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
