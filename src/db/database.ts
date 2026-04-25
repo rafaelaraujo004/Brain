@@ -492,6 +492,48 @@ export async function skipRecurringToNextMonth(
   });
 }
 
+/**
+ * Devolve uma dívida postergada ao seu mês de origem, marca como paga
+ * e restaura a conta original (carriedFromBillId) para 'pending'
+ * para que o mês de origem reflita corretamente o pagamento.
+ *
+ * Fluxo:
+ * 1. Pega a conta postergada (carriedFromBillId/Month/Year preenchidos)
+ * 2. Move ela de volta para o mês de origem (carriedFromMonth/Year)
+ * 3. Limpa os campos "carried", restaura a descrição original
+ * 4. Marca como 'paid'
+ * 5. Marca a conta original (que estava 'skipped') como 'paid' também
+ * 6. Remove eventuais carry-overs em cadeia da conta postergada atual
+ */
+export async function returnBillToOriginalMonth(bill: Bill): Promise<void> {
+  if (!bill.id || !bill.carriedFromMonth || !bill.carriedFromYear) return;
+
+  const originalDescription = bill.originalDescription ?? bill.description.replace(/\s*\[ATRASADA.*?\]/, '').trim();
+
+  // Move a conta postergada para o mês de origem e marca como paga
+  await db.bills.update(bill.id, {
+    month: bill.carriedFromMonth,
+    year: bill.carriedFromYear,
+    description: originalDescription,
+    status: 'paid',
+    observation: bill.observation ? `${bill.observation} (paga com devolução)` : 'Paga com devolução ao mês original',
+    carriedFromBillId: undefined,
+    carriedFromMonth: undefined,
+    carriedFromYear: undefined,
+  });
+
+  // Se a conta original ainda existe como 'skipped', marca como 'paid' também
+  if (bill.carriedFromBillId) {
+    const original = await db.bills.get(bill.carriedFromBillId);
+    if (original && original.status === 'skipped') {
+      await db.bills.update(bill.carriedFromBillId, { status: 'paid' });
+    }
+  }
+
+  // Remove carry-overs pendentes que esta conta tenha gerado em outros meses
+  await removeCarryOverForPaidBill(bill.id);
+}
+
 export async function removeCarryOverForPaidBill(billId: number): Promise<void> {
   const carriedBills = await db.bills
     .where('carriedFromBillId')
