@@ -1,66 +1,135 @@
 import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
+
+type Mode = 'signin' | 'signup' | 'reset';
 
 export function LoginPage() {
-  const { user, signInWithGoogle, redirecting, authError } = useAuth();
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { user, loading, signIn, signUp, resetPassword } = useAuth();
+  const [mode, setMode] = useState<Mode>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [formLoading, setFormLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  const error = authError ?? localError;
-  const busy = loading || redirecting;
+  if (loading) return null;
+  if (user) return <Navigate to="/" replace />;
 
-  async function handleGoogleLogin() {
-    setLocalError(null);
-    setLoading(true);
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+    setFormLoading(true);
     try {
-      await signInWithGoogle();
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setLocalError(err.message);
+      if (mode === 'signin') {
+        await signIn(email, password);
+      } else if (mode === 'signup') {
+        await signUp(email, password);
       } else {
-        setLocalError('Erro ao fazer login. Tente novamente.');
+        await resetPassword(email);
+        setSuccess('E-mail de recuperação enviado! Verifique sua caixa de entrada.');
+        setMode('signin');
       }
+    } catch {
+      // erro já setado pelo AuthContext via authError, mas vamos capturar aqui também
     } finally {
-      setLoading(false);
+      setFormLoading(false);
     }
   }
 
-  if (user) {
-    return <Navigate to="/" replace />;
-  }
+  const titles: Record<Mode, string> = {
+    signin: 'Entrar',
+    signup: 'Criar conta',
+    reset: 'Recuperar senha',
+  };
+
+  const buttons: Record<Mode, string> = {
+    signin: formLoading ? 'Entrando...' : 'Entrar',
+    signup: formLoading ? 'Criando conta...' : 'Criar conta',
+    reset: formLoading ? 'Enviando...' : 'Enviar e-mail',
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] px-4">
-      <div className="w-full max-w-sm bg-[var(--color-surface)] rounded-2xl shadow-xl p-8 flex flex-col items-center gap-6">
-        <div className="flex flex-col items-center gap-2">
+      <div className="w-full max-w-sm bg-[var(--color-surface)] rounded-2xl shadow-xl p-8 flex flex-col gap-6">
+        <div className="flex flex-col items-center gap-1">
           <h1 className="text-2xl font-bold text-[var(--color-text)]">Paguei</h1>
-          <p className="text-sm text-[var(--color-text-muted)]">Faça login para continuar</p>
+          <p className="text-sm text-[var(--color-text-secondary)]">{titles[mode]}</p>
         </div>
 
         {error && (
-          <p className="w-full text-center text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg px-4 py-2">
-            {error}
-          </p>
+          <p className="text-center text-sm text-red-500 bg-red-500/10 rounded-xl px-4 py-2">{error}</p>
+        )}
+        {success && (
+          <p className="text-center text-sm text-green-500 bg-green-500/10 rounded-xl px-4 py-2">{success}</p>
         )}
 
-        <button
-          onClick={handleGoogleLogin}
-          disabled={busy}
-          className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-50 text-gray-700 font-medium border border-gray-300 rounded-xl px-4 py-3 transition-colors disabled:opacity-60 disabled:cursor-not-allowed shadow-sm"
-        >
-          {busy ? (
-            <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-          ) : (
-            <svg className="w-5 h-5" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-            </svg>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="relative">
+            <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]" />
+            <input
+              type="email"
+              placeholder="E-mail"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="w-full pl-9 pr-4 py-3 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-secondary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+            />
+          </div>
+
+          {mode !== 'reset' && (
+            <div className="relative">
+              <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Senha"
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={6}
+                className="w-full pl-9 pr-10 py-3 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-secondary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]"
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           )}
-          {redirecting ? 'Abrindo Google...' : loading ? 'Entrando...' : 'Continuar com Google'}
-        </button>
+
+          <button
+            type="submit"
+            disabled={formLoading}
+            className="w-full py-3 rounded-xl bg-[var(--color-primary)] text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-60"
+          >
+            {buttons[mode]}
+          </button>
+        </form>
+
+        <div className="flex flex-col items-center gap-2 text-sm">
+          {mode === 'signin' && (
+            <>
+              <button onClick={() => { setMode('signup'); setError(null); }} className="text-[var(--color-primary)] hover:underline">
+                Não tem conta? Criar agora
+              </button>
+              <button onClick={() => { setMode('reset'); setError(null); }} className="text-[var(--color-text-secondary)] hover:underline">
+                Esqueci minha senha
+              </button>
+            </>
+          )}
+          {(mode === 'signup' || mode === 'reset') && (
+            <button onClick={() => { setMode('signin'); setError(null); }} className="text-[var(--color-text-secondary)] hover:underline">
+              Voltar para login
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
