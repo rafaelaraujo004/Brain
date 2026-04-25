@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Check, Undo2, Trash2, Edit3, X, RefreshCw, ArrowRight } from 'lucide-react';
-import { db, ensureCarryOverBillsForMonth, removeCarryOverForPaidBill, skipBillToNextMonth, skipRecurringToNextMonth } from '../db/database';
-import { formatCurrency } from '../utils/formatters';
+import { Plus, Check, Undo2, Trash2, Edit3, X, RefreshCw, ArrowRight, Undo } from 'lucide-react';
+import { db, ensureCarryOverBillsForMonth, removeCarryOverForPaidBill, skipBillToNextMonth, skipRecurringToNextMonth, returnBillToOriginalMonth } from '../db/database';
+import { getMonthName from '../utils/formatters';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import type { Bill, RecurringDebt } from '../types';
@@ -100,6 +100,10 @@ export function MonthlyBills() {
     await skipBillToNextMonth(bill);
   };
 
+  const returnBill = async (bill: Bill) => {
+    await returnBillToOriginalMonth(bill);
+  };
+
   const skipRecurring = async (debt: RecurringDebt, installmentNumber: number) => {
     await skipRecurringToNextMonth(debt, installmentNumber, month, year);
   };
@@ -149,9 +153,7 @@ export function MonthlyBills() {
           items={[
             { icon: '✅', title: 'Marcar como paga', description: 'Toque no ícone à esquerda da conta para alternar entre pago e pendente.' },
             { icon: '📋', title: 'Ver ações', description: 'Toque no card da conta para expandir as opções de editar, postergar e excluir.' },
-            { icon: '➡️', title: 'Postergar', description: 'O botão amarelo (→) adia a conta para o próximo mês. Ela fica marcada como "Adiado".' },
-            { icon: '👆', title: 'Selecionar várias', description: 'Segure pressionado em uma conta para ativar o modo de seleção e calcular o total das selecionadas.' },
-            { icon: '🔄', title: 'Dívidas recorrentes', description: 'Parcelas de dívidas recorrentes aparecem automaticamente com o ícone de setas.' },
+            { icon: '➡️', title: 'Postergar', description: 'O botão amarelo (→) adia a conta para o próximo mês. Ela fica marcada como "Adiado".' },            { icon: '↩️', title: 'Devolver ao mês original', description: 'Contas atrasadas (postergadas de outro mês) mostram o botão verde (↩) para devolver ao mês de origem e marcar como paga.' },            { icon: '🔄', title: 'Dívidas recorrentes', description: 'Parcelas de dívidas recorrentes aparecem automaticamente com o ícone de setas.' },
             { icon: '➕', title: 'Adicionar conta', description: 'Use o botão + no canto inferior para cadastrar uma nova conta no mês.' },
           ]}
         />
@@ -201,6 +203,7 @@ export function MonthlyBills() {
             onLongPress={() => toggleSelected(`bill-${bill.id}`)}
             onToggle={() => toggleStatus(bill)}
             onSkip={() => skipBill(bill)}
+            onReturn={() => returnBill(bill)}
             onDelete={() => deleteBill(bill.id!)}
             onEdit={() => {
               setEditingBill(bill);
@@ -265,6 +268,7 @@ function BillItem({
   onLongPress,
   onToggle,
   onSkip,
+  onReturn,
   onDelete,
   onEdit,
 }: {
@@ -275,9 +279,11 @@ function BillItem({
   onLongPress: () => void;
   onToggle: () => void;
   onSkip: () => void;
+  onReturn: () => void;
   onDelete: () => void;
   onEdit: () => void;
 }) {
+  const isCarried = !!(bill.carriedFromMonth && bill.carriedFromYear);
   const [showActions, setShowActions] = useState(false);
   const longPressTimeoutRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
@@ -347,8 +353,8 @@ function BillItem({
             : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]'
         }`}
       >
-        {isPaid ? <Check size={20} /> : isSkipped ? <ArrowRight size={20} /> : <Undo2 size={20} />}
-      </button>
+        {isPaid ? <Check size={20} /> : isSkipped ? <ArrowRight size={20} /> : isCarried ? <Undo size={16} /> : <Undo2 size={20} />}
+      </button>isCarried ? <Undo size={16} /> : 
 
       <div className="flex-1 min-w-0">
         <p className={`text-sm font-medium truncate ${isPaid || isSkipped ? 'line-through' : ''}`}>
@@ -358,6 +364,16 @@ function BillItem({
           <span className="text-xs text-[var(--color-text-secondary)]">
             Dia {bill.dueDay}
           </span>
+          {isCarried && bill.carriedFromMonth && (
+           isCarried && bill.carriedFromMonth && (
+            <span className="text-xs font-medium text-orange-500">
+              ← {getMonthName(bill.carriedFromMonth)}/{bill.carriedFromYear}
+            </span>
+          )}
+          { <span className="text-xs font-medium text-orange-500">
+              ← {getMonthName(bill.carriedFromMonth)}/{bill.carriedFromYear}
+            </span>
+          )}
           {bill.initialValue !== bill.finalValue && (
             <span className="text-xs text-[var(--color-text-secondary)] line-through">
               {formatCurrency(bill.initialValue)}
@@ -383,6 +399,8 @@ function BillItem({
               <span className="badge-paid">Pago</span>
             ) : isSkipped ? (
               <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-500">Adiado</span>
+            ) : isCarried ? (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-500">Atrasada</span>
             ) : isOverdue ? (
               <span className="badge-overdue">Atrasado</span>
             ) : (
@@ -400,7 +418,19 @@ function BillItem({
             >
               <Edit3 size={16} />
             </button>
-            {!isPaid && !isSkipped && (
+            {!isPaid && !isSkipped && isCarried && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReturn();
+                }}
+                className="p-2 rounded-lg bg-green-500/15 text-green-500"
+                title="Devolver ao mês original e pagar"
+              >
+                <Undo size={16} />
+              </button>
+            )}
+            {!isPaid && !isSkipped && !isCarried && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
