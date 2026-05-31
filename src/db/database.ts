@@ -1,7 +1,7 @@
 import Dexie, { type Table } from 'dexie';
 import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem } from '../types';
 import { getMonthName } from '../utils/formatters';
-import { doc, getDoc, onSnapshot, setDoc, type Unsubscribe } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, onSnapshot, query, setDoc, where, type Unsubscribe } from 'firebase/firestore';
 import { firestore } from './firebase';
 
 class AppDatabase extends Dexie {
@@ -93,11 +93,13 @@ interface CloudSnapshot {
 }
 
 const LOCAL_LAST_CHANGE_KEY = 'paguei_local_last_change';
+const SHARING_INVITES_COLLECTION = 'sharingInvites';
 let currentUserId: string | null = null;
+let currentDataOwnerId: string | null = null;
 
 function getCloudDocRef() {
-  if (!firestore || !currentUserId) return null;
-  return doc(firestore, 'users', currentUserId, 'data', 'snapshot');
+  if (!firestore || !currentDataOwnerId) return null;
+  return doc(firestore, 'users', currentDataOwnerId, 'data', 'snapshot');
 }
 
 let isApplyingCloudData = false;
@@ -109,6 +111,74 @@ let lastAppliedCloudUpdatedAt = 0;
 function markLocalChanged(timestamp = Date.now()): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(LOCAL_LAST_CHANGE_KEY, String(timestamp));
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function createShareInviteId(ownerUid: string, targetEmail: string): string {
+  return `${ownerUid}__${normalizeEmail(targetEmail)}`;
+}
+
+async function resolveDataOwnerId(userId: string, userEmail?: string | null): Promise<string> {
+  if (!firestore || !userEmail) return userId;
+
+  const normalized = normalizeEmail(userEmail);
+  if (!normalized) return userId;
+
+  try {
+    const invitationsRef = collection(firestore, SHARING_INVITES_COLLECTION);
+    const activeInviteQuery = query(
+      invitationsRef,
+      where('targetEmail', '==', normalized),
+      where('status', '==', 'active'),
+      limit(1)
+    );
+    const inviteSnapshot = await getDocs(activeInviteQuery);
+    const invite = inviteSnapshot.docs[0]?.data() as { ownerUid?: string } | undefined;
+    const ownerUid = invite?.ownerUid;
+    return ownerUid && typeof ownerUid === 'string' ? ownerUid : userId;
+  } catch (error) {
+    console.error('Falha ao resolver dataset compartilhado:', error);
+    return userId;
+  }
+}
+
+export async function shareDataWithEmail(ownerUid: string, email: string): Promise<{ success: boolean; message: string }> {
+  if (!firestore) {
+    return { success: false, message: 'Firebase não está configurado para compartilhamento.' };
+  }
+
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail || !targetEmail.includes('@')) {
+    return { success: false, message: 'Informe um e-mail válido.' };
+  }
+
+  try {
+    const inviteId = createShareInviteId(ownerUid, targetEmail);
+    const inviteRef = doc(firestore, SHARING_INVITES_COLLECTION, inviteId);
+    const now = Date.now();
+    await setDoc(
+      inviteRef,
+      {
+        ownerUid,
+        targetEmail,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+
+    return {
+      success: true,
+      message: `Compartilhamento ativado para ${targetEmail}. Quando ela entrar com esse e-mail, verá os mesmos dados.`,
+    };
+  } catch (error) {
+    console.error('Falha ao compartilhar dados por e-mail:', error);
+    return { success: false, message: 'Não foi possível ativar o compartilhamento agora.' };
+  }
 }
 
 function getLocalLastChangedAt(): number {
@@ -295,6 +365,7 @@ function ensureRealtimeCloudListener(): void {
 
 export function resetFirebaseSync(): void {
   currentUserId = null;
+  currentDataOwnerId = null;
   syncInitializedPromise = null;
   lastAppliedCloudUpdatedAt = 0;
   if (cloudUnsubscribe) {
@@ -307,11 +378,13 @@ export function resetFirebaseSync(): void {
   }
 }
 
-export async function initializeFirebaseSync(userId: string): Promise<void> {
+export async function initializeFirebaseSync(userId: string, userEmail?: string | null): Promise<void> {
   if (currentUserId !== userId) {
     resetFirebaseSync();
     currentUserId = userId;
   }
+
+  currentDataOwnerId = await resolveDataOwnerId(userId, userEmail);
 
   registerDexieSyncHooks();
 

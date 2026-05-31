@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Sun, Moon, Plus, Trash2, DollarSign, PiggyBank, Download, Upload, Database, CheckCircle2, AlertTriangle, Smartphone, ShieldAlert, X, LogOut, Pencil, Camera } from 'lucide-react';
-import { db, getOrCreateSettings, ensureMonthlyConfig } from '../db/database';
+import { Sun, Moon, Plus, Trash2, DollarSign, PiggyBank, Download, Upload, Database, CheckCircle2, AlertTriangle, Smartphone, ShieldAlert, X, LogOut, Pencil, Camera, Share2 } from 'lucide-react';
+import { db, getOrCreateSettings, ensureMonthlyConfig, shareDataWithEmail } from '../db/database';
 import { exportBackup, downloadBackup, importBackup } from '../db/backup';
 import { formatCurrency, getMonthName } from '../utils/formatters';
 import { useTheme } from '../hooks/useTheme';
@@ -59,6 +59,9 @@ export function SettingsPage() {
   const [deleteMessage, setDeleteMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [authActionLoading, setAuthActionLoading] = useState(false);
   const [authActionMessage, setAuthActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [shareEmail, setShareEmail] = useState('');
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareMessage, setShareMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [profileLoading, setProfileLoading] = useState(false);
@@ -207,6 +210,18 @@ export function SettingsPage() {
     }
   };
 
+  const handleShareData = async () => {
+    if (!user?.uid) return;
+    setShareMessage(null);
+    setShareLoading(true);
+    const result = await shareDataWithEmail(user.uid, shareEmail);
+    setShareLoading(false);
+    setShareMessage({ type: result.success ? 'success' : 'error', text: result.message });
+    if (result.success) {
+      setShareEmail('');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -327,6 +342,41 @@ export function SettingsPage() {
             </button>
           )}
         </div>
+
+        {user && (
+          <div className="mt-4 p-3 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] space-y-2">
+            <div className="flex items-center gap-2">
+              <Share2 size={16} className="text-[var(--color-primary)]" />
+              <p className="text-sm font-semibold">Compartilhar dados com outro e-mail</p>
+            </div>
+            <p className="text-xs text-[var(--color-text-secondary)]">
+              Quem entrar com este e-mail verá e sincronizará os mesmos dados que você.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="email"
+                value={shareEmail}
+                onChange={(e) => setShareEmail(e.target.value)}
+                placeholder="E-mail para compartilhar"
+                className="input-field flex-1"
+              />
+              <button
+                onClick={() => void handleShareData()}
+                disabled={shareLoading || !shareEmail.trim()}
+                className="btn-primary px-4 disabled:opacity-60"
+              >
+                {shareLoading ? 'Enviando...' : 'Compartilhar'}
+              </button>
+            </div>
+
+            {shareMessage && (
+              <div className={`flex items-center gap-2 text-xs ${shareMessage.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>
+                {shareMessage.type === 'success' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                <span>{shareMessage.text}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="md:grid md:grid-cols-2 md:gap-6 space-y-6 md:space-y-0">

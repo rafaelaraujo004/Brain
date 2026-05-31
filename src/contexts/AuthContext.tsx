@@ -44,7 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       setInitialized(true);
       if (firebaseUser) {
-        void initializeFirebaseSync(firebaseUser.uid);
+        void initializeFirebaseSync(firebaseUser.uid, firebaseUser.email);
       } else {
         resetFirebaseSync();
       }
