@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Check, Undo2, Trash2, Edit3, X, RefreshCw, ArrowRight, Undo } from 'lucide-react';
+import { Plus, Check, Undo2, Trash2, Edit3, X, RefreshCw, ArrowRight, Undo, Search } from 'lucide-react';
 import {
   db,
   ensureCarryOverBillsForMonth,
@@ -76,6 +76,7 @@ export function MonthlyBills() {
   const [showForm, setShowForm] = useState(false);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const bills = useLiveQuery(
     () => db.bills.where({ month, year }).sortBy('dueDay'),
@@ -108,6 +109,33 @@ export function MonthlyBills() {
       })
       .filter(Boolean) as { debt: RecurringDebt; installmentNumber: number; isPaid: boolean; isOverdue: boolean }[];
   }, [recurringDebts, bills, month, year]);
+
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+
+  const filteredBills = useMemo(() => {
+    if (!bills) return [];
+    if (!normalizedSearch) return bills;
+
+    return bills.filter((bill) =>
+      [bill.description, bill.originalDescription, bill.observation]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch)
+    );
+  }, [bills, normalizedSearch]);
+
+  const filteredRecurringForMonth = useMemo(() => {
+    if (!normalizedSearch) return recurringForMonth;
+
+    return recurringForMonth.filter((entry) =>
+      [entry.debt.description, entry.debt.observation]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch)
+    );
+  }, [recurringForMonth, normalizedSearch]);
 
   const toggleStatus = async (bill: Bill) => {
     if (bill.status === 'skipped') {
@@ -206,6 +234,27 @@ export function MonthlyBills() {
         />
       </div>
 
+      <div className="card py-3">
+        <div className="flex items-center gap-2">
+          <Search size={16} className="text-[var(--color-text-secondary)]" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Pesquisar contas e dívidas do mês"
+            className="w-full bg-transparent outline-none text-sm"
+          />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="text-xs text-[var(--color-primary)] font-semibold"
+            >
+              Limpar
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Summary bar */}
       <div className="flex justify-between items-center card py-3">
         <div className="text-center">
@@ -240,7 +289,7 @@ export function MonthlyBills() {
 
       {/* Bills list */}
       <div className="space-y-2 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
-        {bills?.map((bill) => (
+        {filteredBills.map((bill) => (
           <BillItem
             key={bill.id}
             bill={bill}
@@ -258,7 +307,7 @@ export function MonthlyBills() {
             }}
           />
         ))}
-        {recurringForMonth.map((r) => (
+        {filteredRecurringForMonth.map((r) => (
           <RecurringBillItem
             key={`recurring-${r.debt.id}`}
             debt={r.debt}
@@ -273,9 +322,11 @@ export function MonthlyBills() {
             onSkip={() => skipRecurring(r.debt, r.installmentNumber)}
           />
         ))}
-        {(bills?.length === 0 && recurringForMonth.length === 0) && (
+        {(filteredBills.length === 0 && filteredRecurringForMonth.length === 0) && (
           <p className="text-center text-[var(--color-text-secondary)] py-8 md:col-span-2">
-            Nenhuma conta cadastrada para este mês
+            {normalizedSearch
+              ? `Nenhuma conta encontrada para "${searchTerm}"`
+              : 'Nenhuma conta cadastrada para este mês'}
           </p>
         )}
       </div>

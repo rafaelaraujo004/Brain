@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Trash2, Edit3, X, Calendar, Hash, CircleDollarSign } from 'lucide-react';
-import { db } from '../db/database';
+import { Plus, Trash2, Edit3, X, Calendar, Hash, CircleDollarSign, Search } from 'lucide-react';
+import { db, updateRecurringDebtPaidInstallmentsWithSync } from '../db/database';
 import { formatCurrency, getMonthName, calculateEndDate } from '../utils/formatters';
 import type { RecurringDebt } from '../types';
 import { HelpButton } from '../components/HelpModal';
@@ -9,11 +9,34 @@ import { HelpButton } from '../components/HelpModal';
 export function RecurringDebts() {
   const [showForm, setShowForm] = useState(false);
   const [editingDebt, setEditingDebt] = useState<RecurringDebt | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const debts = useLiveQuery(() => db.recurringDebts.toArray());
+  const normalizedSearch = searchTerm.trim().toLowerCase();
 
-  const activeDebts = debts?.filter((d) => d.isActive) ?? [];
-  const completedDebts = debts?.filter((d) => !d.isActive) ?? [];
+  const activeDebts = useMemo(() => {
+    const all = debts?.filter((d) => d.isActive) ?? [];
+    if (!normalizedSearch) return all;
+    return all.filter((d) =>
+      [d.description, d.observation]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch)
+    );
+  }, [debts, normalizedSearch]);
+
+  const completedDebts = useMemo(() => {
+    const all = debts?.filter((d) => !d.isActive) ?? [];
+    if (!normalizedSearch) return all;
+    return all.filter((d) =>
+      [d.description, d.observation]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch)
+    );
+  }, [debts, normalizedSearch]);
 
   const deleteDebt = async (id: number) => {
     await db.recurringDebts.delete(id);
@@ -21,19 +44,12 @@ export function RecurringDebts() {
 
   const incrementPaid = async (debt: RecurringDebt) => {
     const newPaid = Math.min(debt.paidInstallments + 1, debt.totalInstallments);
-    const isComplete = newPaid >= debt.totalInstallments;
-    await db.recurringDebts.update(debt.id!, {
-      paidInstallments: newPaid,
-      isActive: !isComplete,
-    });
+    await updateRecurringDebtPaidInstallmentsWithSync(debt.id!, newPaid);
   };
 
   const decrementPaid = async (debt: RecurringDebt) => {
     const newPaid = Math.max(debt.paidInstallments - 1, 0);
-    await db.recurringDebts.update(debt.id!, {
-      paidInstallments: newPaid,
-      isActive: true,
-    });
+    await updateRecurringDebtPaidInstallmentsWithSync(debt.id!, newPaid);
   };
 
   return (
@@ -50,6 +66,27 @@ export function RecurringDebts() {
             { icon: '✅', title: 'Concluídas', description: 'Dívidas com todas as parcelas pagas aparecem na seção "Concluídas" abaixo.' },
           ]}
         />
+      </div>
+
+      <div className="card py-3">
+        <div className="flex items-center gap-2">
+          <Search size={16} className="text-[var(--color-text-secondary)]" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Pesquisar dívida por nome ou observação"
+            className="w-full bg-transparent outline-none text-sm"
+          />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="text-xs text-[var(--color-primary)] font-semibold"
+            >
+              Limpar
+            </button>
+          )}
+        </div>
       </div>
 
       {activeDebts.length > 0 && (
@@ -103,6 +140,14 @@ export function RecurringDebts() {
           <CircleDollarSign size={48} className="mx-auto mb-3 opacity-30" />
           <p>Nenhuma dívida recorrente cadastrada</p>
           <p className="text-sm mt-1">Toque no + para adicionar</p>
+        </div>
+      )}
+
+      {debts && debts.length > 0 && normalizedSearch && activeDebts.length === 0 && completedDebts.length === 0 && (
+        <div className="card text-center py-6">
+          <p className="text-sm text-[var(--color-text-secondary)]">
+            Nenhuma dívida encontrada para "{searchTerm}".
+          </p>
         </div>
       )}
 
@@ -290,7 +335,11 @@ function DebtForm({
     };
 
     if (debt?.id) {
-      await db.recurringDebts.update(debt.id, data);
+      await db.recurringDebts.update(debt.id, {
+        ...data,
+        paidInstallments: debt.paidInstallments,
+      });
+      await updateRecurringDebtPaidInstallmentsWithSync(debt.id, paid);
     } else {
       await db.recurringDebts.add(data);
     }
