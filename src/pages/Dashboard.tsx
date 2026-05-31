@@ -128,6 +128,9 @@ export function Dashboard() {
 
   const totalDue = allItems.reduce((sum, i) => sum + i.value, 0);
   const totalPaid = allItems.filter((i) => i.status === 'paid').reduce((sum, i) => sum + i.value, 0);
+  const amountToSettle = allItems
+    .filter((i) => i.status !== 'paid')
+    .reduce((sum, i) => sum + i.value, 0);
   const totalExtra = extraFunds?.reduce((sum, f) => sum + f.value, 0) ?? 0;
   const totalIncomeSources = incomeSources?.reduce((sum, i) => sum + i.value, 0) ?? 0;
   const totalIncome = salary + totalExtra + totalIncomeSources;
@@ -153,6 +156,7 @@ export function Dashboard() {
             { icon: '◀▶', title: 'Navegar meses', description: 'Use as setas para alternar entre os meses e ver o resumo de cada período.' },
             { icon: '📊', title: 'Barra de progresso', description: 'Mostra a porcentagem de contas pagas em relação ao total do mês.' },
             { icon: '💰', title: 'Cartões de resumo', description: 'Renda Total, Total Devido, Já Pago e Saldo do mês atual.' },
+            { icon: '🧾', title: 'Falta quitar', description: 'Mostra quanto ainda falta pagar no mês selecionado, sem somar contas postergadas.' },
             { icon: '🔄', title: 'Ícone de recorrente', description: 'Itens com ícone de setas são dívidas recorrentes (parcelas).' },
             { icon: '⚠️', title: 'Contas atrasadas', description: 'Contas com vencimento ultrapassado aparecem destacadas em vermelho.' },
           ]}
@@ -213,6 +217,21 @@ export function Dashboard() {
           color={difference >= 0 ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}
           bgColor={difference >= 0 ? 'bg-green-500/10' : 'bg-red-500/10'}
         />
+      </div>
+
+      <div className="card flex items-center justify-between">
+        <div className="min-w-0">
+          <p className="text-xs text-[var(--color-text-secondary)]">Falta para quitar no mês</p>
+          <p className={`text-lg font-bold ${amountToSettle > 0 ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}>
+            {formatCurrency(amountToSettle)}
+          </p>
+          <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
+            Considera apenas contas pendentes/atrasadas do mês selecionado
+          </p>
+        </div>
+        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${amountToSettle > 0 ? 'bg-red-500/10 text-[var(--color-danger)]' : 'bg-green-500/10 text-[var(--color-success)]'}`}>
+          <Wallet size={20} />
+        </div>
       </div>
 
       {/* Quick view of upcoming bills */}

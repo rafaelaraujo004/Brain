@@ -17,6 +17,8 @@ import { db, getOrCreateSettings } from '../db/database';
 import { formatCurrency, getMonthName } from '../utils/formatters';
 import type { RecurringDebt, PriorityLevel } from '../types';
 import { HelpButton } from '../components/HelpModal';
+import { useMonthNavigation } from '../hooks/useMonthNavigation';
+import { MonthSelector } from '../components/MonthSelector';
 
 interface Suggestion {
   type: 'alert' | 'tip' | 'warning';
@@ -44,6 +46,13 @@ interface PriorityEntry {
   value: number;
 }
 
+interface ActionStep {
+  type: 'alert' | 'warning' | 'tip';
+  title: string;
+  detail: string;
+  impact: string;
+}
+
 const LEVEL_SCORE: Record<PriorityLevel, number> = { alta: 10, media: 5, baixa: 2 };
 const LEVEL_COLORS: Record<PriorityLevel, { bg: string; text: string; label: string }> = {
   alta: { bg: 'bg-red-500/15', text: 'text-red-500', label: 'Alta' },
@@ -62,15 +71,19 @@ function getRecurringForCurrentMonth(debt: RecurringDebt, month: number, year: n
 
 export function FinancialAdvisor() {
   const today = new Date();
-  const month = today.getMonth() + 1;
-  const year = today.getFullYear();
+  const { month, year, goToPrev, goToNext } = useMonthNavigation();
+  const currentMonth = today.getMonth() + 1;
+  const currentYear = today.getFullYear();
   const currentDay = today.getDate();
+  const isCurrentSelectedMonth = month === currentMonth && year === currentYear;
+  const isPastSelectedMonth = year < currentYear || (year === currentYear && month < currentMonth);
 
   const [budgetInput, setBudgetInput] = useState('');
   const [showSimulation, setShowSimulation] = useState(false);
   const [manualSelections, setManualSelections] = useState<Set<string>>(new Set());
   const [simMode, setSimMode] = useState<'auto' | 'manual'>('auto');
   const [showPriorities, setShowPriorities] = useState(false);
+  const [showAllSuggestions, setShowAllSuggestions] = useState(false);
 
   const priorities = useLiveQuery(
     () => db.priorities.toArray(),
@@ -168,11 +181,13 @@ export function FinancialAdvisor() {
     const pendingBills = bills.filter((b) => b.status === 'pending');
     const totalPending = pendingBills.reduce((s, b) => s + b.finalValue, 0);
 
-    // Alert: bills due in the next 3 days
-    const urgentBills = pendingBills.filter((b) => {
-      const diff = b.dueDay - currentDay;
-      return diff >= 0 && diff <= 3;
-    });
+    // Alert: bills due in the next 3 days (current month only)
+    const urgentBills = isCurrentSelectedMonth
+      ? pendingBills.filter((b) => {
+          const diff = b.dueDay - currentDay;
+          return diff >= 0 && diff <= 3;
+        })
+      : [];
     if (urgentBills.length > 0) {
       tips.push({
         type: 'alert',
@@ -184,7 +199,11 @@ export function FinancialAdvisor() {
     }
 
     // Alert: overdue bills
-    const overdueBills = pendingBills.filter((b) => b.dueDay < currentDay);
+    const overdueBills = isPastSelectedMonth
+      ? pendingBills
+      : isCurrentSelectedMonth
+      ? pendingBills.filter((b) => b.dueDay < currentDay)
+      : [];
     if (overdueBills.length > 0) {
       tips.push({
         type: 'warning',
@@ -200,7 +219,9 @@ export function FinancialAdvisor() {
       const recurringPending = recurringDebts
         .filter((d) => {
           const info = getRecurringForCurrentMonth(d, month, year);
-          return info && !info.isPaid;
+          if (!info || info.isPaid) return false;
+          const hasLinkedBill = bills.some((b) => b.recurringDebtId === d.id);
+          return !hasLinkedBill;
         })
         .reduce((s, d) => s + d.installmentValue, 0);
 
@@ -284,7 +305,110 @@ export function FinancialAdvisor() {
     }
 
     return tips.sort((a, b) => b.priority - a.priority);
-  }, [bills, recurringDebts, allBills, totalIncome, currentDay, month, year, prioMap]);
+  }, [bills, recurringDebts, allBills, totalIncome, currentDay, month, year, prioMap, isCurrentSelectedMonth, isPastSelectedMonth]);
+
+  const pendingTotal = useMemo(
+    () => pendingItems.reduce((sum, item) => sum + item.value, 0),
+    [pendingItems]
+  );
+
+  const criticalPendingTotal = useMemo(() => {
+    if (isPastSelectedMonth) return pendingTotal;
+    if (!isCurrentSelectedMonth) return 0;
+
+    return pendingItems
+      .filter((item) => item.dueDay <= currentDay + 3)
+      .reduce((sum, item) => sum + item.value, 0);
+  }, [pendingItems, pendingTotal, isCurrentSelectedMonth, isPastSelectedMonth, currentDay]);
+
+  const incomeCoveragePercent = useMemo(() => {
+    if (pendingTotal <= 0) return 100;
+    if (totalIncome <= 0) return 0;
+    return Math.round(Math.min(100, (totalIncome / pendingTotal) * 100));
+  }, [totalIncome, pendingTotal]);
+
+  const actionPlan = useMemo((): ActionStep[] => {
+    const steps: ActionStep[] = [];
+
+    if (pendingItems.length === 0) {
+      steps.push({
+        type: 'tip',
+        title: 'Mês organizado',
+        detail: 'Não há contas pendentes para este mês.',
+        impact: 'Risco financeiro imediato: baixo',
+      });
+      return steps;
+    }
+
+    const criticalItems = isPastSelectedMonth
+      ? pendingItems
+      : isCurrentSelectedMonth
+      ? pendingItems.filter((item) => item.dueDay <= currentDay + 3)
+      : [];
+
+    if (criticalItems.length > 0) {
+      const criticalAmount = criticalItems.reduce((sum, item) => sum + item.value, 0);
+      steps.push({
+        type: 'alert',
+        title: 'Passo 1: atacar o crítico primeiro',
+        detail: `${criticalItems.length} conta${criticalItems.length > 1 ? 's' : ''} crítica${criticalItems.length > 1 ? 's' : ''} somam ${formatCurrency(criticalAmount)}.`,
+        impact: 'Reduz risco de atraso e juros',
+      });
+    }
+
+    const gap = pendingTotal - totalIncome;
+    if (gap > 0) {
+      const lowPriorityItems = [...pendingItems]
+        .filter((item) => item.priority <= LEVEL_SCORE.baixa)
+        .sort((a, b) => b.value - a.value);
+
+      const candidates: SimItem[] = [];
+      let accumulated = 0;
+      for (const item of lowPriorityItems) {
+        if (accumulated >= gap) break;
+        candidates.push(item);
+        accumulated += item.value;
+      }
+
+      steps.push({
+        type: 'warning',
+        title: 'Passo 2: fechar o buraco do orçamento',
+        detail:
+          candidates.length > 0
+            ? `Para caber no mês, adie ${formatCurrency(gap)} começando por ${candidates.slice(0, 2).map((c) => c.description).join(' e ')}.`
+            : `Faltam ${formatCurrency(gap)} para cobrir todas as contas.`,
+        impact: `Pressão atual: ${formatCurrency(gap)} acima da renda`,
+      });
+    } else {
+      steps.push({
+        type: 'tip',
+        title: 'Passo 2: quitar tudo e proteger o caixa',
+        detail: `Após quitar o mês, você ainda preserva ${formatCurrency(Math.abs(gap))}.`,
+        impact: 'Folga financeira positiva',
+      });
+    }
+
+    const noConfiguredPriority = pendingItems.filter((item) => item.priority === 0).length;
+    if (noConfiguredPriority > 0) {
+      steps.push({
+        type: 'tip',
+        title: 'Passo 3: ajustar prioridades para melhorar previsões',
+        detail: `${noConfiguredPriority} conta${noConfiguredPriority > 1 ? 's estão' : ' está'} sem prioridade definida.`,
+        impact: 'Simulador automático fica mais assertivo',
+      });
+    } else {
+      steps.push({
+        type: 'tip',
+        title: 'Passo 3: manter consistência do plano',
+        detail: 'Revise o simulador antes de pagar para evitar decisões por impulso.',
+        impact: 'Melhora previsibilidade do mês',
+      });
+    }
+
+    return steps.slice(0, 3);
+  }, [pendingItems, pendingTotal, totalIncome, isCurrentSelectedMonth, isPastSelectedMonth, currentDay]);
+
+  const visibleSuggestions = showAllSuggestions ? suggestions : suggestions.slice(0, 3);
 
   // Simulation logic
   const budget = parseFloat(budgetInput.replace(',', '.')) || 0;
@@ -405,13 +529,63 @@ export function FinancialAdvisor() {
         <HelpButton
           title="Como usar o Assistente"
           items={[
-            { icon: '🧠', title: 'Sugestões', description: 'O assistente analisa suas contas e gera alertas e dicas automaticamente.' },
+            { icon: '🧠', title: 'Plano objetivo', description: 'Veja 3 passos claros para agir no mês selecionado.' },
             { icon: '⚠️', title: 'Alertas', description: 'Contas vencendo em breve ou atrasadas aparecem destacadas em vermelho.' },
-            { icon: '💡', title: 'Dicas', description: 'Dicas sobre margem financeira, prioridades e padrões de gastos.' },
+            { icon: '💡', title: 'Sugestões', description: 'Mostra primeiro o que tem maior impacto, com opção de ver mais.' },
             { icon: '🧮', title: 'Simulador', description: 'Informe um valor e veja quais contas cabem nesse orçamento.' },
             { icon: '🔄', title: 'Auto vs Manual', description: 'No modo Auto, as contas mais prioritárias são selecionadas. No Manual, você escolhe.' },
           ]}
         />
+      </div>
+
+      <MonthSelector month={month} year={year} onPrev={goToPrev} onNext={goToNext} />
+
+      <div className="grid grid-cols-3 gap-3">
+        <div className="card py-3">
+          <p className="text-xs text-[var(--color-text-secondary)]">Falta quitar</p>
+          <p className={`text-sm font-bold ${pendingTotal > 0 ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}>
+            {formatCurrency(pendingTotal)}
+          </p>
+        </div>
+        <div className="card py-3">
+          <p className="text-xs text-[var(--color-text-secondary)]">Valor crítico</p>
+          <p className={`text-sm font-bold ${criticalPendingTotal > 0 ? 'text-orange-500' : 'text-[var(--color-success)]'}`}>
+            {formatCurrency(criticalPendingTotal)}
+          </p>
+        </div>
+        <div className="card py-3">
+          <p className="text-xs text-[var(--color-text-secondary)]">Cobertura</p>
+          <p className={`text-sm font-bold ${incomeCoveragePercent >= 100 ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}`}>
+            {incomeCoveragePercent}%
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">
+          Plano de ação — 3 passos
+        </h2>
+        {actionPlan.map((step, index) => (
+          <div
+            key={step.title}
+            className={`card border-l-4 ${
+              step.type === 'alert' ? 'border-l-red-500' : step.type === 'warning' ? 'border-l-orange-500' : 'border-l-blue-500'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
+                step.type === 'alert' ? 'bg-red-500/15 text-red-500' : step.type === 'warning' ? 'bg-orange-500/15 text-orange-500' : 'bg-blue-500/15 text-blue-500'
+              }`}>
+                {index + 1}
+              </div>
+              <div>
+                <p className="text-sm font-semibold">{step.title}</p>
+                <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">{step.detail}</p>
+                <p className="text-[11px] mt-1 text-[var(--color-text-secondary)]">Impacto: {step.impact}</p>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Smart Suggestions */}
@@ -426,7 +600,7 @@ export function FinancialAdvisor() {
             <p className="text-sm text-[var(--color-text-secondary)]">Tudo em dia! Nenhum alerta no momento.</p>
           </div>
         ) : (
-          suggestions.map((s, i) => (
+          visibleSuggestions.map((s, i) => (
             <div
               key={i}
               className={`card flex gap-3 items-start border-l-4 ${
@@ -453,6 +627,15 @@ export function FinancialAdvisor() {
               </div>
             </div>
           ))
+        )}
+
+        {suggestions.length > 3 && (
+          <button
+            onClick={() => setShowAllSuggestions((prev) => !prev)}
+            className="w-full text-xs font-semibold text-[var(--color-primary)] py-2"
+          >
+            {showAllSuggestions ? 'Ver menos sugestões' : `Ver mais ${suggestions.length - 3} sugest${suggestions.length - 3 > 1 ? 'ões' : 'ão'}`}
+          </button>
         )}
       </div>
 

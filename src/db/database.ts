@@ -1,7 +1,7 @@
 import Dexie, { type Table } from 'dexie';
 import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem } from '../types';
 import { getMonthName } from '../utils/formatters';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, setDoc, type Unsubscribe } from 'firebase/firestore';
 import { firestore } from './firebase';
 
 class AppDatabase extends Dexie {
@@ -103,6 +103,8 @@ function getCloudDocRef() {
 let isApplyingCloudData = false;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncInitializedPromise: Promise<void> | null = null;
+let cloudUnsubscribe: Unsubscribe | null = null;
+let lastAppliedCloudUpdatedAt = 0;
 
 function markLocalChanged(timestamp = Date.now()): void {
   if (typeof window === 'undefined') return;
@@ -146,6 +148,7 @@ async function pushLocalSnapshotToCloud(): Promise<void> {
   if (!cloudDocRef || isApplyingCloudData) return;
 
   const snapshot = await buildLocalSnapshot();
+  lastAppliedCloudUpdatedAt = Math.max(lastAppliedCloudUpdatedAt, snapshot.updatedAt);
   await setDoc(cloudDocRef, snapshot, { merge: true });
 }
 
@@ -251,9 +254,53 @@ function registerDexieSyncHooks(): void {
   }
 }
 
+function ensureRealtimeCloudListener(): void {
+  const cloudDocRef = getCloudDocRef();
+  if (!cloudDocRef) return;
+
+  if (cloudUnsubscribe) {
+    cloudUnsubscribe();
+    cloudUnsubscribe = null;
+  }
+
+  cloudUnsubscribe = onSnapshot(
+    cloudDocRef,
+    async (docSnapshot) => {
+      if (!docSnapshot.exists()) return;
+
+      const cloudSnapshot = docSnapshot.data() as Partial<CloudSnapshot>;
+      const cloudUpdatedAt = typeof cloudSnapshot.updatedAt === 'number' ? cloudSnapshot.updatedAt : 0;
+      if (cloudUpdatedAt <= 0 || cloudUpdatedAt <= lastAppliedCloudUpdatedAt) return;
+
+      const localUpdatedAt = getLocalLastChangedAt();
+      const localCount = await getLocalItemCount();
+
+      if (localCount > 0 && localUpdatedAt > cloudUpdatedAt) {
+        return;
+      }
+
+      if (!hasCloudData(cloudSnapshot) && localCount > 0) {
+        return;
+      }
+
+      await applyCloudSnapshotToLocal(cloudSnapshot);
+      lastAppliedCloudUpdatedAt = cloudUpdatedAt;
+      markLocalChanged(cloudUpdatedAt);
+    },
+    (error) => {
+      console.error('Listener de sync em tempo real falhou:', error);
+    }
+  );
+}
+
 export function resetFirebaseSync(): void {
   currentUserId = null;
   syncInitializedPromise = null;
+  lastAppliedCloudUpdatedAt = 0;
+  if (cloudUnsubscribe) {
+    cloudUnsubscribe();
+    cloudUnsubscribe = null;
+  }
   if (syncTimer) {
     clearTimeout(syncTimer);
     syncTimer = null;
@@ -289,15 +336,24 @@ export async function initializeFirebaseSync(userId: string): Promise<void> {
       const cloudUpdatedAt = typeof cloudSnapshot.updatedAt === 'number' ? cloudSnapshot.updatedAt : 0;
       const localUpdatedAt = getLocalLastChangedAt();
       const localCount = await getLocalItemCount();
+      const cloudHasData = hasCloudData(cloudSnapshot);
 
-      if (localCount === 0 && hasCloudData(cloudSnapshot)) {
+      if (localCount === 0 && cloudHasData) {
         await applyCloudSnapshotToLocal(cloudSnapshot);
+        lastAppliedCloudUpdatedAt = cloudUpdatedAt;
         markLocalChanged(cloudUpdatedAt || Date.now());
+        return;
+      }
+
+      if (localCount > 0 && !cloudHasData) {
+        await pushLocalSnapshotToCloud();
+        markLocalChanged();
         return;
       }
 
       if (cloudUpdatedAt > localUpdatedAt) {
         await applyCloudSnapshotToLocal(cloudSnapshot);
+        lastAppliedCloudUpdatedAt = cloudUpdatedAt;
         markLocalChanged(cloudUpdatedAt);
         return;
       }
@@ -310,6 +366,7 @@ export async function initializeFirebaseSync(userId: string): Promise<void> {
   })();
 
   await syncInitializedPromise;
+  ensureRealtimeCloudListener();
 }
 
 
@@ -408,6 +465,114 @@ function getNextMonthYear(month: number, year: number): { month: number; year: n
   return { month: month + 1, year };
 }
 
+function getInstallmentNumberForDate(
+  startMonth: number,
+  startYear: number,
+  month: number,
+  year: number
+): number {
+  const monthsSinceStart = (year - startYear) * 12 + (month - startMonth);
+  return monthsSinceStart + 1;
+}
+
+function getInstallmentNumberForDebtMonth(debt: RecurringDebt, month: number, year: number): number | null {
+  const installmentNumber = getInstallmentNumberForDate(debt.startMonth, debt.startYear, month, year);
+  if (installmentNumber < 1 || installmentNumber > debt.totalInstallments) {
+    return null;
+  }
+  return installmentNumber;
+}
+
+async function syncLinkedBillsWithRecurringDebt(
+  debtId: number,
+  paidInstallments: number,
+  keepSkipped = true
+): Promise<void> {
+  const [debt, linkedBills] = await Promise.all([
+    db.recurringDebts.get(debtId),
+    db.bills.where('recurringDebtId').equals(debtId).toArray(),
+  ]);
+
+  if (!debt || linkedBills.length === 0) return;
+
+  for (const linkedBill of linkedBills) {
+    if (!linkedBill.id) continue;
+    if (keepSkipped && linkedBill.status === 'skipped') continue;
+
+    const installmentNumber = getInstallmentNumberForDebtMonth(debt, linkedBill.month, linkedBill.year);
+    if (!installmentNumber) continue;
+
+    const shouldBePaid = paidInstallments >= installmentNumber;
+    const nextStatus = shouldBePaid ? 'paid' : 'pending';
+    if (linkedBill.status !== nextStatus) {
+      await db.bills.update(linkedBill.id, { status: nextStatus });
+    }
+  }
+}
+
+async function syncRecurringDebtFromBillStatus(
+  bill: Bill,
+  nextStatus: Bill['status']
+): Promise<void> {
+  if (!bill.recurringDebtId) return;
+
+  const debt = await db.recurringDebts.get(bill.recurringDebtId);
+  if (!debt || !debt.id) return;
+
+  const installmentNumber = getInstallmentNumberForDebtMonth(debt, bill.month, bill.year);
+  if (!installmentNumber) return;
+
+  let nextPaidInstallments = debt.paidInstallments;
+  if (nextStatus === 'paid') {
+    nextPaidInstallments = Math.max(nextPaidInstallments, installmentNumber);
+  } else if (bill.status === 'paid') {
+    nextPaidInstallments = Math.min(nextPaidInstallments, installmentNumber - 1);
+  }
+
+  const hasPaidChanged = nextPaidInstallments !== debt.paidInstallments;
+  const nextIsActive = nextPaidInstallments < debt.totalInstallments;
+  const hasActiveChanged = debt.isActive !== nextIsActive;
+
+  if (hasPaidChanged || hasActiveChanged) {
+    await db.recurringDebts.update(debt.id, {
+      paidInstallments: nextPaidInstallments,
+      isActive: nextIsActive,
+    });
+    await syncLinkedBillsWithRecurringDebt(debt.id, nextPaidInstallments);
+  }
+}
+
+export async function updateBillStatusWithSync(billId: number, nextStatus: Bill['status']): Promise<void> {
+  const bill = await db.bills.get(billId);
+  if (!bill || !bill.id) return;
+
+  if (bill.status !== nextStatus) {
+    await db.bills.update(bill.id, { status: nextStatus });
+  }
+
+  await syncRecurringDebtFromBillStatus(bill, nextStatus);
+}
+
+export async function updateRecurringDebtPaidInstallmentsWithSync(
+  debtId: number,
+  nextPaidInstallments: number
+): Promise<void> {
+  const debt = await db.recurringDebts.get(debtId);
+  if (!debt || !debt.id) return;
+
+  const boundedPaid = Math.max(0, Math.min(nextPaidInstallments, debt.totalInstallments));
+  const nextIsActive = boundedPaid < debt.totalInstallments;
+
+  if (boundedPaid !== debt.paidInstallments || debt.isActive !== nextIsActive) {
+    await db.recurringDebts.update(debt.id, {
+      paidInstallments: boundedPaid,
+      isActive: nextIsActive,
+    });
+  }
+
+  await syncLinkedBillsWithRecurringDebt(debt.id, boundedPaid);
+}
+
 export async function skipBillToNextMonth(bill: Bill): Promise<void> {
   if (!bill.id) return;
 
@@ -439,7 +604,7 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
   });
 
   // Mark original as skipped
-  await db.bills.update(bill.id, { status: 'skipped' });
+  await updateBillStatusWithSync(bill.id, 'skipped');
 }
 
 export async function skipRecurringToNextMonth(
@@ -526,7 +691,7 @@ export async function returnBillToOriginalMonth(bill: Bill): Promise<void> {
   if (bill.carriedFromBillId) {
     const original = await db.bills.get(bill.carriedFromBillId);
     if (original && original.status === 'skipped') {
-      await db.bills.update(bill.carriedFromBillId, { status: 'paid' });
+      await updateBillStatusWithSync(bill.carriedFromBillId, 'paid');
     }
   }
 

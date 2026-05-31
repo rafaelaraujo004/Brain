@@ -1,12 +1,62 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Plus, Check, Undo2, Trash2, Edit3, X, RefreshCw, ArrowRight, Undo } from 'lucide-react';
-import { db, ensureCarryOverBillsForMonth, removeCarryOverForPaidBill, skipBillToNextMonth, skipRecurringToNextMonth, returnBillToOriginalMonth } from '../db/database';
+import {
+  db,
+  ensureCarryOverBillsForMonth,
+  removeCarryOverForPaidBill,
+  skipBillToNextMonth,
+  skipRecurringToNextMonth,
+  returnBillToOriginalMonth,
+  updateBillStatusWithSync,
+  updateRecurringDebtPaidInstallmentsWithSync,
+} from '../db/database';
 import { formatCurrency, getMonthName } from '../utils/formatters';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import type { Bill, RecurringDebt } from '../types';
 import { HelpButton } from '../components/HelpModal';
+
+interface CarryOverTrace {
+  totalPostponements: number;
+  months: string[];
+}
+
+function formatMonthYearShort(month: number, year: number): string {
+  return `${getMonthName(month)}/${year}`;
+}
+
+async function buildCarryOverTrace(bill: Bill): Promise<CarryOverTrace | null> {
+  if (!bill.carriedFromBillId || !bill.carriedFromMonth || !bill.carriedFromYear) return null;
+
+  const monthMap = new Map<string, string>();
+  const visitedBillIds = new Set<number>();
+  let cursor: Bill | undefined = bill;
+
+  while (cursor?.carriedFromBillId && cursor.carriedFromMonth && cursor.carriedFromYear) {
+    const monthKey = `${cursor.carriedFromYear}-${cursor.carriedFromMonth}`;
+    if (!monthMap.has(monthKey)) {
+      monthMap.set(monthKey, formatMonthYearShort(cursor.carriedFromMonth, cursor.carriedFromYear));
+    }
+
+    const previousBillId: number = cursor.carriedFromBillId;
+    if (visitedBillIds.has(previousBillId)) break;
+    visitedBillIds.add(previousBillId);
+
+    cursor = await db.bills.get(previousBillId);
+  }
+
+  if (monthMap.size === 0) return null;
+
+  const orderedMonths = [...monthMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([, label]) => label);
+
+  return {
+    totalPostponements: orderedMonths.length,
+    months: orderedMonths,
+  };
+}
 
 function getRecurringForMonth(debt: RecurringDebt, month: number, year: number) {
   const monthsSinceStart = (year - debt.startYear) * 12 + (month - debt.startMonth);
@@ -62,14 +112,14 @@ export function MonthlyBills() {
   const toggleStatus = async (bill: Bill) => {
     if (bill.status === 'skipped') {
       // Revert skipped: set back to pending and remove carry-over
-      await db.bills.update(bill.id!, { status: 'pending' });
+      await updateBillStatusWithSync(bill.id!, 'pending');
       if (bill.id) {
         await removeCarryOverForPaidBill(bill.id);
       }
       return;
     }
     const newStatus = bill.status === 'paid' ? 'pending' : 'paid';
-    await db.bills.update(bill.id!, { status: newStatus });
+    await updateBillStatusWithSync(bill.id!, newStatus);
     if (newStatus === 'paid' && bill.id) {
       await removeCarryOverForPaidBill(bill.id);
     }
@@ -78,17 +128,14 @@ export function MonthlyBills() {
   const toggleRecurringPaid = async (debt: RecurringDebt, installmentNumber: number, currentlyPaid: boolean) => {
     if (currentlyPaid) {
       // Unpay: set paidInstallments to installmentNumber - 1
-      await db.recurringDebts.update(debt.id!, {
-        paidInstallments: Math.min(debt.paidInstallments, installmentNumber - 1),
-        isActive: true,
-      });
+      await updateRecurringDebtPaidInstallmentsWithSync(
+        debt.id!,
+        Math.min(debt.paidInstallments, installmentNumber - 1)
+      );
     } else {
       // Pay: set paidInstallments to at least installmentNumber
       const newPaid = Math.max(debt.paidInstallments, installmentNumber);
-      await db.recurringDebts.update(debt.id!, {
-        paidInstallments: newPaid,
-        isActive: newPaid < debt.totalInstallments,
-      });
+      await updateRecurringDebtPaidInstallmentsWithSync(debt.id!, newPaid);
     }
   };
 
@@ -284,6 +331,10 @@ function BillItem({
   onEdit: () => void;
 }) {
   const isCarried = !!(bill.carriedFromMonth && bill.carriedFromYear);
+  const carryTrace = useLiveQuery(
+    () => buildCarryOverTrace(bill),
+    [bill.id, bill.carriedFromBillId, bill.carriedFromMonth, bill.carriedFromYear]
+  );
   const [showActions, setShowActions] = useState(false);
   const longPressTimeoutRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
@@ -377,6 +428,11 @@ function BillItem({
         </div>
         {bill.observation && (
           <p className="text-xs text-[var(--color-warning)] mt-0.5 truncate">• {bill.observation}</p>
+        )}
+        {carryTrace && (
+          <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 truncate">
+            Postergada {carryTrace.totalPostponements}x • Meses: {carryTrace.months.join(', ')}
+          </p>
         )}
       </div>
 
@@ -630,7 +686,8 @@ function BillForm({
     };
 
     if (bill?.id) {
-      await db.bills.update(bill.id, data);
+      await db.bills.update(bill.id, { ...data, status: bill.status });
+      await updateBillStatusWithSync(bill.id, status);
     } else {
       await db.bills.add(data);
     }
