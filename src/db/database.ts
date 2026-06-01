@@ -93,6 +93,7 @@ interface CloudSnapshot {
 }
 
 const LOCAL_LAST_CHANGE_KEY = 'paguei_local_last_change';
+const LOCAL_SYNC_OWNER_KEY = 'paguei_sync_owner';
 const SHARING_INVITES_COLLECTION = 'sharingInvites';
 let currentUserId: string | null = null;
 let currentDataOwnerId: string | null = null;
@@ -103,14 +104,35 @@ function getCloudDocRef() {
 }
 
 let isApplyingCloudData = false;
+let isSyncBootstrapping = false;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncInitializedPromise: Promise<void> | null = null;
 let cloudUnsubscribe: Unsubscribe | null = null;
 let lastAppliedCloudUpdatedAt = 0;
 
+function getLocalLastChangeStorageKey(): string {
+  const owner = currentDataOwnerId ?? currentUserId ?? 'local';
+  return `${LOCAL_LAST_CHANGE_KEY}_${owner}`;
+}
+
+function getSyncOwnerStorageKey(): string {
+  const user = currentUserId ?? 'anon';
+  return `${LOCAL_SYNC_OWNER_KEY}_${user}`;
+}
+
+function getLastSyncedOwnerId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem(getSyncOwnerStorageKey());
+}
+
+function rememberSyncedOwnerId(ownerId: string): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(getSyncOwnerStorageKey(), ownerId);
+}
+
 function markLocalChanged(timestamp = Date.now()): void {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(LOCAL_LAST_CHANGE_KEY, String(timestamp));
+  window.localStorage.setItem(getLocalLastChangeStorageKey(), String(timestamp));
 }
 
 function normalizeEmail(email: string): string {
@@ -183,7 +205,7 @@ export async function shareDataWithEmail(ownerUid: string, email: string): Promi
 
 function getLocalLastChangedAt(): number {
   if (typeof window === 'undefined') return 0;
-  const raw = window.localStorage.getItem(LOCAL_LAST_CHANGE_KEY);
+  const raw = window.localStorage.getItem(getLocalLastChangeStorageKey());
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -213,9 +235,9 @@ async function buildLocalSnapshot(): Promise<CloudSnapshot> {
   };
 }
 
-async function pushLocalSnapshotToCloud(): Promise<void> {
+async function pushLocalSnapshotToCloud(allowDuringBootstrap = false): Promise<void> {
   const cloudDocRef = getCloudDocRef();
-  if (!cloudDocRef || isApplyingCloudData) return;
+  if (!cloudDocRef || isApplyingCloudData || (isSyncBootstrapping && !allowDuringBootstrap)) return;
 
   const snapshot = await buildLocalSnapshot();
   lastAppliedCloudUpdatedAt = Math.max(lastAppliedCloudUpdatedAt, snapshot.updatedAt);
@@ -223,7 +245,7 @@ async function pushLocalSnapshotToCloud(): Promise<void> {
 }
 
 function scheduleCloudSync(): void {
-  if (!getCloudDocRef() || isApplyingCloudData) return;
+  if (!getCloudDocRef() || isApplyingCloudData || isSyncBootstrapping) return;
 
   markLocalChanged();
 
@@ -367,6 +389,7 @@ export function resetFirebaseSync(): void {
   currentUserId = null;
   currentDataOwnerId = null;
   syncInitializedPromise = null;
+  isSyncBootstrapping = false;
   lastAppliedCloudUpdatedAt = 0;
   if (cloudUnsubscribe) {
     cloudUnsubscribe();
@@ -396,12 +419,24 @@ export async function initializeFirebaseSync(userId: string, userEmail?: string 
   }
 
   syncInitializedPromise = (async () => {
+    isSyncBootstrapping = true;
     try {
+      const ownerId = currentDataOwnerId ?? userId;
+      const isOwnerUser = currentUserId === ownerId;
+      const lastSyncedOwnerId = getLastSyncedOwnerId();
+      const isFirstSyncForThisOwner = lastSyncedOwnerId !== ownerId;
+
       const cloudDoc = await getDoc(cloudDocRef);
 
       if (!cloudDoc.exists()) {
-        await pushLocalSnapshotToCloud();
-        markLocalChanged();
+        if (isOwnerUser) {
+          await pushLocalSnapshotToCloud(true);
+          markLocalChanged();
+        } else {
+          await applyCloudSnapshotToLocal({});
+          markLocalChanged();
+        }
+        rememberSyncedOwnerId(ownerId);
         return;
       }
 
@@ -411,16 +446,32 @@ export async function initializeFirebaseSync(userId: string, userEmail?: string 
       const localCount = await getLocalItemCount();
       const cloudHasData = hasCloudData(cloudSnapshot);
 
+      // First sync on this device for this owner always trusts cloud to prevent stale local overwrite.
+      if (isFirstSyncForThisOwner) {
+        await applyCloudSnapshotToLocal(cloudSnapshot);
+        lastAppliedCloudUpdatedAt = cloudUpdatedAt;
+        markLocalChanged(cloudUpdatedAt || Date.now());
+        rememberSyncedOwnerId(ownerId);
+        return;
+      }
+
       if (localCount === 0 && cloudHasData) {
         await applyCloudSnapshotToLocal(cloudSnapshot);
         lastAppliedCloudUpdatedAt = cloudUpdatedAt;
         markLocalChanged(cloudUpdatedAt || Date.now());
+        rememberSyncedOwnerId(ownerId);
         return;
       }
 
       if (localCount > 0 && !cloudHasData) {
-        await pushLocalSnapshotToCloud();
-        markLocalChanged();
+        if (isOwnerUser) {
+          await pushLocalSnapshotToCloud(true);
+          markLocalChanged();
+        } else {
+          await applyCloudSnapshotToLocal(cloudSnapshot);
+          markLocalChanged(cloudUpdatedAt || Date.now());
+        }
+        rememberSyncedOwnerId(ownerId);
         return;
       }
 
@@ -428,13 +479,22 @@ export async function initializeFirebaseSync(userId: string, userEmail?: string 
         await applyCloudSnapshotToLocal(cloudSnapshot);
         lastAppliedCloudUpdatedAt = cloudUpdatedAt;
         markLocalChanged(cloudUpdatedAt);
+        rememberSyncedOwnerId(ownerId);
         return;
       }
 
-      await pushLocalSnapshotToCloud();
-      markLocalChanged();
+      if (isOwnerUser) {
+        await pushLocalSnapshotToCloud(true);
+        markLocalChanged();
+      } else {
+        await applyCloudSnapshotToLocal(cloudSnapshot);
+        markLocalChanged(cloudUpdatedAt || Date.now());
+      }
+      rememberSyncedOwnerId(ownerId);
     } catch (error) {
       console.error('Falha ao sincronizar dados com Firebase:', error);
+    } finally {
+      isSyncBootstrapping = false;
     }
   })();
 
