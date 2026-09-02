@@ -1,3 +1,24 @@
+/**
+ * Registro de um adiamento. Cada vez que uma conta é postergada uma entrada é
+ * acrescentada ao histórico e carregada para a competência seguinte, de modo
+ * que a conta sempre saiba desde quando está sendo empurrada e em que data
+ * cada adiamento aconteceu.
+ */
+export interface PostponeRecord {
+  /** Competência de onde a conta saiu */
+  fromMonth: number;
+  fromYear: number;
+  /** Competência para onde a conta foi */
+  toMonth: number;
+  toYear: number;
+  /** Data em que o adiamento foi registrado (ISO) */
+  postponedAt: string;
+  /** Vencimento que ficou para trás neste adiamento (ISO) */
+  dueDate: string;
+  /** true quando gerado pelo carry-over automático da virada de mês */
+  auto?: boolean;
+}
+
 export interface Bill {
   id?: number;
   description: string;
@@ -13,6 +34,15 @@ export interface Bill {
   carriedFromBillId?: number;
   carriedFromMonth?: number;
   carriedFromYear?: number;
+  /** Competência original, preservada por toda a cadeia de adiamentos */
+  originMonth?: number;
+  originYear?: number;
+  /** Vencimento original (ISO), antes de qualquer adiamento */
+  originalDueDate?: string;
+  /** Data do último adiamento (ISO) */
+  postponedAt?: string;
+  /** Histórico completo de adiamentos, do mais antigo ao mais recente */
+  postponeHistory?: PostponeRecord[];
 }
 
 export interface RecurringDebt {

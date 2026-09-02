@@ -6,7 +6,7 @@ import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
 type Mode = 'signin' | 'signup' | 'reset';
 
 export function LoginPage() {
-  const { user, loading, signIn, signUp, resetPassword } = useAuth();
+  const { user, loading, isLocalMode, signIn, signUp, resetPassword } = useAuth();
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -16,7 +16,7 @@ export function LoginPage() {
   const [success, setSuccess] = useState<string | null>(null);
 
   if (loading) return null;
-  if (user) return <Navigate to="/" replace />;
+  if (user || isLocalMode) return <Navigate to="/" replace />;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

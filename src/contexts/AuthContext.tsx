@@ -14,6 +14,12 @@ import { initializeFirebaseSync, resetFirebaseSync } from '../db/database';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  /**
+   * true quando o Firebase nao esta configurado. O app e offline-first (Dexie),
+   * entao nesse caso ele roda normalmente em modo local e o login deixa de ser
+   * obrigatorio — a conta so existe para habilitar o sync na nuvem.
+   */
+  isLocalMode: boolean;
   authError: string | null;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
@@ -105,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, authError, signIn, signUp, resetPassword, updateUserProfile, logout }}>
+    <AuthContext.Provider value={{ user, loading, isLocalMode: !auth, authError, signIn, signUp, resetPassword, updateUserProfile, logout }}>
       {children}
     </AuthContext.Provider>
   );

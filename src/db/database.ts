@@ -1,6 +1,6 @@
 import Dexie, { type Table } from 'dexie';
-import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem } from '../types';
-import { getMonthName } from '../utils/formatters';
+import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem, PostponeRecord } from '../types';
+import { buildDueDate, getMonthName } from '../utils/formatters';
 import { collection, doc, getDoc, getDocs, limit, onSnapshot, query, setDoc, where, type Unsubscribe } from 'firebase/firestore';
 import { firestore } from './firebase';
 
@@ -73,6 +73,76 @@ class AppDatabase extends Dexie {
             await priorities.update(p.id, { level: 'media' });
           }
         }
+      }
+    });
+
+    // v6: historico de adiamentos com datas. Retroalimenta as contas que ja
+    // existiam percorrendo a cadeia carriedFromBillId.
+    this.version(6).stores({
+      bills: '++id, [month+year], recurringDebtId, status, dueDay, carriedFromBillId, [originYear+originMonth], postponedAt',
+      recurringDebts: '++id, isActive',
+      extraFunds: '++id, [month+year]',
+      monthlyConfigs: '++id, [month+year]',
+      incomeSources: '++id, isActive',
+      settings: '++id',
+      priorities: '++id, keyword, level',
+    }).upgrade(async (tx) => {
+      const billsTable = tx.table('bills');
+      const all: Bill[] = await billsTable.toArray();
+      const byId = new Map<number, Bill>();
+      for (const b of all) if (b.id) byId.set(b.id, b);
+
+      for (const bill of all) {
+        if (!bill.id || bill.postponeHistory) continue;
+
+        // Reconstroi a cadeia do mais antigo ao mais recente.
+        const chain: Bill[] = [];
+        const seen = new Set<number>();
+        let cursor: Bill | undefined = bill;
+        while (cursor?.carriedFromBillId && cursor.carriedFromMonth && cursor.carriedFromYear) {
+          chain.unshift(cursor);
+          const prevId: number = cursor.carriedFromBillId;
+          if (seen.has(prevId)) break;
+          seen.add(prevId);
+          cursor = byId.get(prevId);
+        }
+
+        if (chain.length === 0) {
+          // Nunca foi adiada: so registra a origem e o vencimento original.
+          await billsTable.update(bill.id, {
+            originMonth: bill.month,
+            originYear: bill.year,
+            originalDueDate: buildDueDate(bill.month, bill.year, bill.dueDay).toISOString(),
+            postponeHistory: [],
+          });
+          continue;
+        }
+
+        const history: PostponeRecord[] = chain.map((step) => {
+          const fromMonth = step.carriedFromMonth as number;
+          const fromYear = step.carriedFromYear as number;
+          return {
+            fromMonth,
+            fromYear,
+            toMonth: step.month,
+            toYear: step.year,
+            // Sem timestamp real nos dados antigos: usamos o primeiro dia da
+            // competencia de destino, que e quando a virada aconteceu.
+            postponedAt: new Date(step.year, step.month - 1, 1).toISOString(),
+            dueDate: buildDueDate(fromMonth, fromYear, step.dueDay).toISOString(),
+            auto: true,
+          };
+        });
+
+        const first = history[0];
+        const last = history[history.length - 1];
+        await billsTable.update(bill.id, {
+          originMonth: first.fromMonth,
+          originYear: first.fromYear,
+          originalDueDate: first.dueDate,
+          postponedAt: last.postponedAt,
+          postponeHistory: history,
+        });
       }
     });
   }
@@ -568,8 +638,10 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
     if (alreadyCarried) continue;
 
     const baseDescription = prevBill.originalDescription ?? prevBill.description;
-    const carryDescription = `${baseDescription} [ATRASADA - ${getMonthName(prev.month)}]`;
-
+    const tracking = buildPostponementFields(prevBill, { month, year }, { auto: true });
+    // O rotulo aponta sempre para a competencia de ORIGEM, nao para a anterior,
+    // para que uma conta empurrada varias vezes nao perca a referencia real.
+    const carryDescription = `${baseDescription} [ATRASADA - ${getMonthName(tracking.originMonth as number)}/${tracking.originYear}]`;
     newCarryOvers.push({
       description: carryDescription,
       originalDescription: baseDescription,
@@ -577,12 +649,13 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
       finalValue: prevBill.finalValue,
       status: 'pending',
       dueDay: prevBill.dueDay,
-      observation: `Conta atrasada do mês de ${getMonthName(prev.month)}`,
+      observation: prevBill.observation,
       month,
       year,
       carriedFromBillId: prevBill.id,
       carriedFromMonth: prev.month,
       carriedFromYear: prev.year,
+      ...tracking,
     });
   }
 
@@ -596,6 +669,48 @@ function getNextMonthYear(month: number, year: number): { month: number; year: n
     return { month: 1, year: year + 1 };
   }
   return { month: month + 1, year };
+}
+
+/**
+ * Monta os campos de rastreio que a nova conta (a que vai para o mes seguinte)
+ * precisa carregar: competencia de origem, vencimento original, data deste
+ * adiamento e o historico acumulado. Ao encadear adiamentos, o historico da
+ * conta anterior e preservado e a nova entrada e acrescentada no fim.
+ */
+function buildPostponementFields(
+  source: Bill,
+  target: { month: number; year: number },
+  options: { auto?: boolean; at?: Date } = {}
+): Pick<Bill, 'originMonth' | 'originYear' | 'originalDueDate' | 'postponedAt' | 'postponeHistory'> {
+  const at = options.at ?? new Date();
+  const originMonth = source.originMonth ?? source.month;
+  const originYear = source.originYear ?? source.year;
+  const missedDueDate = buildDueDate(source.month, source.year, source.dueDay);
+
+  const entry: PostponeRecord = {
+    fromMonth: source.month,
+    fromYear: source.year,
+    toMonth: target.month,
+    toYear: target.year,
+    postponedAt: at.toISOString(),
+    dueDate: missedDueDate.toISOString(),
+    ...(options.auto ? { auto: true } : {}),
+  };
+
+  return {
+    originMonth,
+    originYear,
+    originalDueDate:
+      source.originalDueDate ?? buildDueDate(originMonth, originYear, source.dueDay).toISOString(),
+    postponedAt: entry.postponedAt,
+    postponeHistory: [...(source.postponeHistory ?? []), entry],
+  };
+}
+
+/** Quantas vezes a conta ja foi empurrada. */
+export function getPostponeCount(bill: Bill): number {
+  if (bill.postponeHistory) return bill.postponeHistory.length;
+  return bill.carriedFromBillId ? 1 : 0;
 }
 
 function getInstallmentNumberForDate(
@@ -719,8 +834,8 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
   if (existing) return;
 
   const baseDescription = bill.originalDescription ?? bill.description;
-  const carryDescription = `${baseDescription} [ATRASADA - ${getMonthName(bill.month)}]`;
-
+  const tracking = buildPostponementFields(bill, next);
+  const carryDescription = `${baseDescription} [ATRASADA - ${getMonthName(tracking.originMonth as number)}/${tracking.originYear}]`;
   await db.bills.add({
     description: carryDescription,
     originalDescription: baseDescription,
@@ -728,12 +843,13 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
     finalValue: bill.finalValue,
     status: 'pending',
     dueDay: bill.dueDay,
-    observation: `Conta atrasada do mês de ${getMonthName(bill.month)}`,
+    observation: bill.observation,
     month: next.month,
     year: next.year,
     carriedFromBillId: bill.id,
     carriedFromMonth: bill.month,
     carriedFromYear: bill.year,
+    ...tracking,
   });
 
   // Mark original as skipped
@@ -757,8 +873,10 @@ export async function skipRecurringToNextMonth(
 
   const next = getNextMonthYear(month, year);
 
+  const originalDueDate = buildDueDate(month, year, debt.dueDay).toISOString();
+
   // Create a skipped bill for the current month (so it appears as "adiado")
-  const skippedBillId = await db.bills.add({
+  const skippedBill: Bill = {
     description: `${debt.description} (${installmentNumber}/${debt.totalInstallments})`,
     originalDescription: debt.description,
     initialValue: debt.installmentValue,
@@ -769,9 +887,15 @@ export async function skipRecurringToNextMonth(
     month,
     year,
     recurringDebtId: debt.id,
-  });
+    originMonth: month,
+    originYear: year,
+    originalDueDate,
+    postponeHistory: [],
+  };
+  const skippedBillId = await db.bills.add(skippedBill);
 
   // Create a pending bill for next month as carry-over
+  const tracking = buildPostponementFields({ ...skippedBill, id: skippedBillId as number }, next);
   const carryDescription = `Parcela de ${debt.description} - ${getMonthName(month)} (${installmentNumber}/${debt.totalInstallments})`;
 
   await db.bills.add({
@@ -781,12 +905,13 @@ export async function skipRecurringToNextMonth(
     finalValue: debt.installmentValue,
     status: 'pending',
     dueDay: debt.dueDay,
-    observation: 'Parcela recorrente adiada do mês anterior',
+    observation: `Parcela adiada 1x — vencimento original em ${getMonthName(month)}/${year}`,
     month: next.month,
     year: next.year,
     carriedFromBillId: skippedBillId as number,
     carriedFromMonth: month,
     carriedFromYear: year,
+    ...tracking,
   });
 }
 
@@ -808,24 +933,49 @@ export async function returnBillToOriginalMonth(bill: Bill): Promise<void> {
 
   const originalDescription = bill.originalDescription ?? bill.description.replace(/\s*\[ATRASADA.*?\]/, '').trim();
 
-  // Move a conta postergada para o mês de origem e marca como paga
+  // Move a conta postergada para a competência de origem real (a primeira da
+  // cadeia, nao apenas a anterior) e marca como paga.
+  const originMonth = bill.originMonth ?? bill.carriedFromMonth;
+  const originYear = bill.originYear ?? bill.carriedFromYear;
+
+  // Percorre a cadeia inteira para tras. Com adiamentos encadeados sobram
+  // registros 'skipped' em cada mes intermediario; eles nao sao obrigacoes
+  // daqueles meses (a obrigacao andou junto com a conta), entao sao removidos
+  // para que a divida apareca uma unica vez, no mes de origem.
+  const upstreamIds: number[] = [];
+  const seen = new Set<number>();
+  let recurringDebtId = bill.recurringDebtId;
+  let cursorId = bill.carriedFromBillId;
+
+  while (cursorId && !seen.has(cursorId)) {
+    seen.add(cursorId);
+    const previous: Bill | undefined = await db.bills.get(cursorId);
+    if (!previous?.id) break;
+    upstreamIds.push(previous.id);
+    // O vinculo com a divida recorrente vive na primeira conta da cadeia;
+    // preserva-lo evita que a parcela volte a aparecer como em aberto.
+    recurringDebtId = recurringDebtId ?? previous.recurringDebtId;
+    cursorId = previous.carriedFromBillId;
+  }
+
   await db.bills.update(bill.id, {
-    month: bill.carriedFromMonth,
-    year: bill.carriedFromYear,
+    month: originMonth,
+    year: originYear,
     description: originalDescription,
     status: 'paid',
     observation: bill.observation ? `${bill.observation} (paga com devolução)` : 'Paga com devolução ao mês original',
+    recurringDebtId,
     carriedFromBillId: undefined,
     carriedFromMonth: undefined,
     carriedFromYear: undefined,
+    postponedAt: undefined,
+    postponeHistory: [],
+    originMonth,
+    originYear,
   });
 
-  // Se a conta original ainda existe como 'skipped', marca como 'paid' também
-  if (bill.carriedFromBillId) {
-    const original = await db.bills.get(bill.carriedFromBillId);
-    if (original && original.status === 'skipped') {
-      await updateBillStatusWithSync(bill.carriedFromBillId, 'paid');
-    }
+  if (upstreamIds.length > 0) {
+    await db.bills.bulkDelete(upstreamIds);
   }
 
   // Remove carry-overs pendentes que esta conta tenha gerado em outros meses
