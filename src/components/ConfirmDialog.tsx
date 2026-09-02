@@ -39,20 +39,24 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 bg-black/60 z-[70] flex items-end md:items-center justify-center"
+      className="fixed inset-0 z-[70] flex items-end md:items-center justify-center animate-fade"
+      style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)' }}
       onClick={onCancel}
     >
       <div
         role="alertdialog"
         aria-modal="true"
-        className="bg-[var(--color-surface)] w-full max-w-sm rounded-t-3xl md:rounded-3xl p-6 pb-24 md:pb-6 space-y-4"
+        className="animate-sheet w-full max-w-sm rounded-t-3xl md:rounded-3xl p-6 pb-24 md:pb-6 space-y-5 border border-[var(--color-border)]"
+        style={{ background: 'var(--surface-elevated)', boxShadow: 'var(--shadow-lg)' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-3">
           <div
-            className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
-              destructive ? 'bg-red-500/15 text-[var(--color-danger)]' : 'bg-blue-500/15 text-[var(--color-primary)]'
-            }`}
+            className="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0"
+            style={{
+              background: destructive ? 'var(--color-danger-soft)' : 'var(--color-primary-soft)',
+              color: destructive ? 'var(--color-danger)' : 'var(--color-primary)',
+            }}
           >
             <AlertTriangle size={20} />
           </div>
@@ -69,9 +73,12 @@ export function ConfirmDialog({
           <button
             onClick={onConfirm}
             autoFocus
-            className={`flex-1 rounded-xl px-4 py-2.5 font-semibold text-white ${
-              destructive ? 'bg-[var(--color-danger)]' : 'bg-[var(--color-primary)]'
-            }`}
+            className="flex-1 rounded-2xl px-4 py-3 font-semibold text-white transition-transform active:scale-97"
+            style={{
+              background: destructive
+                ? 'var(--color-danger)'
+                : 'linear-gradient(135deg, var(--color-primary), var(--color-accent))',
+            }}
           >
             {confirmLabel}
           </button>

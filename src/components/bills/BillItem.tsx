@@ -1,13 +1,16 @@
 import { useMemo, useRef, useState } from 'react';
-import { Check, Undo2, Trash2, Edit3, ArrowRight, Undo } from 'lucide-react';
+import { Check, Trash2, Edit3, ArrowRight, Undo, Clock } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { formatPostponeSummary, formatPostponeTimeline, getPostponeStatus } from '../../utils/bills';
 import type { Bill } from '../../types';
 
 /**
- * Cartão de uma conta do mês. Concentra tudo que o usuário precisa saber
- * sobre atraso e adiamentos: desde quando a dívida se arrasta, em que data
- * cada adiamento aconteceu e há quanto tempo ela está vencida.
+ * Cartão de uma conta do mês.
+ *
+ * Concentra tudo que o usuário precisa saber sobre atraso e adiamentos:
+ * desde quando a dívida se arrasta, em que data cada adiamento aconteceu e há
+ * quanto tempo ela está vencida. As ações ficam escondidas até o toque para a
+ * lista respirar — o estado normal é de leitura, não de operação.
  */
 export function BillItem({
   bill,
@@ -35,14 +38,14 @@ export function BillItem({
   const [showActions, setShowActions] = useState(false);
   const longPressTimeoutRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
+
   const isPaid = bill.status === 'paid';
   const isSkipped = bill.status === 'skipped';
 
-  // Todo o rastreio de adiamento vem do proprio registro — sem percorrer a
+  // Todo o rastreio de adiamento vem do próprio registro — sem percorrer a
   // cadeia no banco a cada render.
   const postpone = useMemo(() => getPostponeStatus(bill), [bill]);
   const isCarried = postpone.isCarried;
-  const isOverdue = postpone.isOverdue;
   const postponeSummary = formatPostponeSummary(postpone);
   const timeline = useMemo(
     () => (showActions ? formatPostponeTimeline(postpone) : []),
@@ -69,24 +72,30 @@ export function BillItem({
       suppressClickRef.current = false;
       return;
     }
-
     if (selectionMode) {
       onSelect();
       return;
     }
-
-    setShowActions(!showActions);
+    setShowActions((v) => !v);
   };
+
+  // Uma cor por estado, usada na borda, no selo e no valor — para o estado
+  // ser legível de relance sem precisar ler nada.
+  const accent = isPaid
+    ? 'var(--color-success)'
+    : isSkipped
+    ? 'var(--color-warning)'
+    : postpone.isLate
+    ? 'var(--color-danger)'
+    : 'var(--color-text-tertiary)';
 
   return (
     <div
-      className={`card transition-all duration-200 ${
-        isPaid || isSkipped ? 'opacity-60' : ''
-      } ${selected ? 'ring-2 ring-[var(--color-primary)] bg-blue-500/5' : ''
-      } ${postpone.isLate && !isPaid && !isSkipped
-        ? 'border-l-4 border-l-[var(--color-danger)]'
-        : ''
-      }`}
+      className={`card card-interactive !p-3.5 ${isPaid || isSkipped ? 'opacity-65' : ''}`}
+      style={{
+        borderColor: selected ? 'var(--color-primary)' : undefined,
+        boxShadow: selected ? '0 0 0 3px var(--color-primary-soft)' : undefined,
+      }}
       onPointerDown={startLongPress}
       onPointerUp={clearLongPress}
       onPointerLeave={clearLongPress}
@@ -94,161 +103,177 @@ export function BillItem({
       onClick={handleCardClick}
     >
       <div className="flex items-center gap-3">
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-        className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
-          isPaid
-            ? 'bg-green-500/15 text-green-500'
-            : isSkipped
-            ? 'bg-yellow-500/15 text-yellow-500'
-            : isOverdue
-            ? 'bg-orange-500/15 text-orange-500'
-            : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]'
-        }`}
-      >
-        {isPaid ? <Check size={20} /> : isSkipped ? <ArrowRight size={20} /> : <Undo2 size={20} />}
-      </button>
+        {/* Botão de pagar. É a ação mais frequente da tela, então ganha o
+            canto esquerdo e o maior alvo de toque do cartão. */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          aria-label={isPaid ? 'Desmarcar pagamento' : 'Marcar como paga'}
+          className="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all duration-200 active:scale-90"
+          style={{
+            background: isPaid ? 'var(--color-success)' : 'var(--color-surface-2)',
+            border: `1px solid ${isPaid ? 'transparent' : 'var(--color-border)'}`,
+            color: isPaid ? '#fff' : 'var(--color-text-tertiary)',
+          }}
+        >
+          {isPaid ? <Check size={19} strokeWidth={3} /> : isSkipped ? <ArrowRight size={18} /> : null}
+        </button>
 
-      <div className="flex-1 min-w-0">
-        <p className={`text-sm font-medium truncate ${isPaid || isSkipped ? 'line-through' : ''}`}>
-          {bill.originalDescription ?? bill.description}
-        </p>
-        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-          <span className="text-xs text-[var(--color-text-secondary)]">
-            Vence {formatDate(postpone.currentDueDate)}
-          </span>
-          {isCarried && (
-            <span className="text-xs font-medium text-orange-500">
-              ← {postpone.originLabel}
+        <div className="flex-1 min-w-0">
+          <p
+            className={`text-sm font-semibold truncate ${
+              isPaid ? 'line-through text-[var(--color-text-secondary)]' : ''
+            }`}
+          >
+            {bill.originalDescription ?? bill.description}
+          </p>
+
+          <div className="flex items-center gap-x-2 gap-y-0.5 mt-1 flex-wrap">
+            <span className="text-[11px] text-[var(--color-text-tertiary)] tnum">
+              {formatDate(postpone.currentDueDate)}
             </span>
+            {isCarried && (
+              <span className="text-[11px] font-semibold text-[var(--color-warning)]">
+                ← {postpone.originLabel}
+              </span>
+            )}
+            {postpone.isLate && postpone.overdueLabel && (
+              <span className="text-[11px] font-bold text-[var(--color-danger)]">
+                vencida {postpone.overdueLabel}
+              </span>
+            )}
+            {bill.initialValue !== bill.finalValue && (
+              <span className="text-[11px] text-[var(--color-text-tertiary)] line-through tnum">
+                {formatCurrency(bill.initialValue)}
+              </span>
+            )}
+          </div>
+
+          {bill.observation && (
+            <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 truncate">
+              {bill.observation}
+            </p>
           )}
-          {postpone.isLate && postpone.overdueLabel && (
-            <span className="text-xs font-semibold text-[var(--color-danger)]">
-              vencida {postpone.overdueLabel}
-            </span>
-          )}
-          {bill.initialValue !== bill.finalValue && (
-            <span className="text-xs text-[var(--color-text-secondary)] line-through">
-              {formatCurrency(bill.initialValue)}
-            </span>
+          {postponeSummary && (
+            <p className="text-[11px] text-[var(--color-warning)] mt-0.5 truncate flex items-center gap-1">
+              <Clock size={10} className="flex-shrink-0" />
+              {postponeSummary}
+            </p>
           )}
         </div>
-        {bill.observation && (
-          <p className="text-xs text-[var(--color-warning)] mt-0.5 truncate">• {bill.observation}</p>
-        )}
-        {postponeSummary && (
-          <p className="text-[11px] text-orange-400 mt-0.5 truncate">{postponeSummary}</p>
-        )}
-      </div>
 
-      <div className="flex items-center gap-2">
-        {selectionMode ? (
-          <span className={selected ? 'badge-paid' : 'badge-pending'}>
-            {selected ? 'Selecionada' : 'Selecionar'}
+        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+          <span className="money-lg text-[15px]" style={{ color: isPaid ? undefined : accent }}>
+            {formatCurrency(bill.finalValue)}
           </span>
-        ) : !showActions ? (
-          <div className="flex flex-col items-end gap-1">
-            <span className={`text-sm font-bold ${isPaid ? 'text-[var(--color-success)]' : isSkipped ? 'text-yellow-500' : isOverdue ? 'text-[var(--color-danger)]' : ''}`}>
-              {formatCurrency(bill.finalValue)}
+          {selectionMode ? (
+            <span className={selected ? 'badge-paid' : 'badge-pending'}>
+              {selected ? 'Selecionada' : 'Selecionar'}
             </span>
-            {isPaid ? (
-              <span className="badge-paid">Pago</span>
-            ) : isSkipped ? (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-500">Adiado</span>
-            ) : isCarried ? (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-500">
-                Adiada {postpone.times}x
-              </span>
-            ) : isOverdue ? (
-              <span className="badge-overdue">Vencida</span>
-            ) : (
-              <span className="badge-pending">Pendente</span>
-            )}
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onEdit();
-              }}
-              className="p-2 rounded-lg bg-blue-500/15 text-blue-500"
-            >
-              <Edit3 size={16} />
-            </button>
-            {!isPaid && !isSkipped && isCarried && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onReturn();
-                }}
-                className="p-2 rounded-lg bg-green-500/15 text-green-500"
-                title={`Devolver a ${postpone.originLabel} e pagar`}
-              >
-                <Undo size={16} />
-              </button>
-            )}
-            {/* Uma conta ja adiada continua podendo ser adiada: o historico
-                acumula e ela nunca perde a competencia de origem. */}
-            {!isPaid && !isSkipped && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSkip();
-                }}
-                className="p-2 rounded-lg bg-yellow-500/15 text-yellow-500"
-                title={
-                  isCarried
-                    ? `Adiar de novo (já adiada ${postpone.times}x)`
-                    : 'Postergar para o próximo mês'
-                }
-              >
-                <ArrowRight size={16} />
-              </button>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              className="p-2 rounded-lg bg-red-500/15 text-red-500"
-            >
-              <Trash2 size={16} />
-            </button>
-          </div>
-        )}
-      </div>
+          ) : isPaid ? (
+            <span className="badge-paid">Pago</span>
+          ) : isSkipped ? (
+            <span className="badge-postponed">Adiado</span>
+          ) : isCarried ? (
+            <span className="badge-postponed">Adiada {postpone.times}x</span>
+          ) : postpone.isOverdue ? (
+            <span className="badge-overdue">Vencida</span>
+          ) : (
+            <span className="badge-pending">Pendente</span>
+          )}
+        </div>
       </div>
 
-      {timeline.length > 0 && (
+      {/* --- Painel de ações e histórico --------------------------------- */}
+      {showActions && !selectionMode && (
         <div
-          className="mt-3 pt-3 border-t border-white/10 space-y-1"
+          className="mt-3.5 pt-3.5 border-t border-[var(--color-border)] animate-rise"
           onClick={(e) => e.stopPropagation()}
         >
-          <p className="text-[11px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">
-            Histórico de adiamentos
-          </p>
-          {timeline.map((line) => (
-            <p key={line} className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
-              {line}
-            </p>
-          ))}
-          <p className="text-[11px] pt-1 text-[var(--color-text-secondary)]">
-            Vencimento original:{' '}
-            <span className="font-medium text-[var(--color-text)]">
-              {formatDate(postpone.originalDueDate)}
-            </span>
-            {postpone.daysLate > 0 && (
-              <span className="text-[var(--color-danger)] font-medium">
-                {' '}— vencida {postpone.overdueLabel}
-              </span>
+          <div className="flex flex-wrap gap-2">
+            <ActionButton onClick={onEdit} icon={<Edit3 size={14} />} label="Editar" />
+            {!isPaid && !isSkipped && isCarried && (
+              <ActionButton
+                onClick={onReturn}
+                icon={<Undo size={14} />}
+                label={`Devolver a ${postpone.originLabel}`}
+                tone="var(--color-success)"
+              />
             )}
-          </p>
+            {/* Uma conta já adiada continua podendo ser adiada: o histórico
+                acumula e ela nunca perde a competência de origem. */}
+            {!isPaid && !isSkipped && (
+              <ActionButton
+                onClick={onSkip}
+                icon={<ArrowRight size={14} />}
+                label={isCarried ? 'Adiar de novo' : 'Adiar'}
+                tone="var(--color-warning)"
+              />
+            )}
+            <ActionButton
+              onClick={onDelete}
+              icon={<Trash2 size={14} />}
+              label="Excluir"
+              tone="var(--color-danger)"
+            />
+          </div>
+
+          {timeline.length > 0 && (
+            <div className="mt-3.5 rounded-2xl p-3 bg-[var(--color-surface-2)] space-y-1.5">
+              <p className="label-caps">Histórico de adiamentos</p>
+              {timeline.map((line) => (
+                <p
+                  key={line}
+                  className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed tnum"
+                >
+                  {line}
+                </p>
+              ))}
+              <p className="text-[11px] pt-1.5 border-t border-[var(--color-border)] text-[var(--color-text-secondary)]">
+                Vencimento original:{' '}
+                <span className="font-bold text-[var(--color-text)] tnum">
+                  {formatDate(postpone.originalDueDate)}
+                </span>
+                {postpone.daysLate > 0 && (
+                  <span className="text-[var(--color-danger)] font-bold">
+                    {' '}
+                    — vencida {postpone.overdueLabel}
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function ActionButton({
+  onClick,
+  icon,
+  label,
+  tone,
+}: {
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  tone?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-150 active:scale-95 border"
+      style={{
+        color: tone ?? 'var(--color-text-secondary)',
+        background: 'var(--color-surface-2)',
+        borderColor: 'var(--color-border)',
+      }}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }

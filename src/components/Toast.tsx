@@ -32,10 +32,10 @@ interface ToastContextValue {
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
-const TONE_STYLES: Record<ToastTone, { icon: typeof Check; className: string }> = {
-  success: { icon: Check, className: 'text-[var(--color-success)]' },
-  info: { icon: Info, className: 'text-[var(--color-primary)]' },
-  warning: { icon: AlertTriangle, className: 'text-[var(--color-warning)]' },
+const TONE_STYLES: Record<ToastTone, { icon: typeof Check; color: string; soft: string }> = {
+  success: { icon: Check, color: 'var(--color-success)', soft: 'var(--color-success-soft)' },
+  info: { icon: Info, color: 'var(--color-primary)', soft: 'var(--color-primary-soft)' },
+  warning: { icon: AlertTriangle, color: 'var(--color-warning)', soft: 'var(--color-warning-soft)' },
 };
 
 const DEFAULT_DURATION_MS = 6000;
@@ -90,28 +90,38 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <div
               key={toast.id}
               role="status"
-              className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 shadow-lg"
+              className="glass animate-sheet pointer-events-auto flex items-center gap-3 rounded-2xl border border-[var(--color-border)] px-3.5 py-3"
+              style={{ boxShadow: 'var(--shadow-lg)' }}
             >
-              <Icon size={18} className={`flex-shrink-0 ${tone.className}`} />
-              <p className="flex-1 text-sm leading-snug">{toast.message}</p>
+              <span
+                className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: tone.soft, color: tone.color }}
+              >
+                <Icon size={16} strokeWidth={2.5} />
+              </span>
+              <p className="flex-1 text-[13px] font-medium leading-snug">{toast.message}</p>
               {toast.actionLabel && toast.onAction && (
                 <button
                   onClick={async () => {
                     dismiss(toast.id);
                     await toast.onAction?.();
                   }}
-                  className="flex items-center gap-1 flex-shrink-0 text-sm font-semibold text-[var(--color-primary)]"
+                  className="flex items-center gap-1.5 flex-shrink-0 text-[13px] font-bold px-3 py-1.5 rounded-xl transition-transform active:scale-95"
+                  style={{
+                    color: 'var(--color-primary)',
+                    background: 'var(--color-primary-soft)',
+                  }}
                 >
-                  <Undo2 size={14} />
+                  <Undo2 size={13} />
                   {toast.actionLabel}
                 </button>
               )}
               <button
                 onClick={() => dismiss(toast.id)}
                 aria-label="Fechar aviso"
-                className="flex-shrink-0 text-[var(--color-text-secondary)]"
+                className="flex-shrink-0 text-[var(--color-text-tertiary)] hover:text-[var(--color-text)] transition-colors"
               >
-                <X size={16} />
+                <X size={15} />
               </button>
             </div>
           );

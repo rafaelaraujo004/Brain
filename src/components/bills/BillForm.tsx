@@ -59,14 +59,25 @@ export function BillForm({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-[60] flex items-end md:items-center justify-center" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[60] flex items-end md:items-center justify-center animate-fade"
+      style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)' }}
+      onClick={onClose}
+    >
       <div
-        className="bg-[var(--color-surface)] w-full max-w-lg rounded-t-3xl md:rounded-3xl p-6 pb-24 md:pb-6 space-y-4 max-h-[90vh] overflow-y-auto"
+        className="animate-sheet w-full max-w-lg rounded-t-3xl md:rounded-3xl p-6 pb-24 md:pb-6 space-y-4 max-h-[90vh] overflow-y-auto border border-[var(--color-border)]"
+        style={{ background: 'var(--surface-elevated)', boxShadow: 'var(--shadow-lg)' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center">
-          <h3 className="text-lg font-bold">{bill ? 'Editar Conta' : 'Nova Conta'}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-[var(--color-surface-2)]">
+          <h3 className="text-lg font-extrabold tracking-tight">
+            {bill ? 'Editar conta' : 'Nova conta'}
+          </h3>
+          <button
+            onClick={onClose}
+            aria-label="Fechar"
+            className="btn-icon hover:bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]"
+          >
             <X size={20} />
           </button>
         </div>

@@ -14,6 +14,7 @@ import {
   updateRecurringDebtPaidInstallmentsWithSync,
 } from '../db/database';
 import { formatCurrency, getMonthName } from '../utils/formatters';
+import { AnimatedCurrency } from '../components/AnimatedCurrency';
 import { getPostponeStatus, getRecurringStatusForMonth } from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
@@ -220,8 +221,8 @@ export function MonthlyBills() {
   }, [selectedIds, bills, recurringForMonth]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="space-y-4 pb-4">
+      <header className="flex items-center justify-between gap-2 pt-1">
         <MonthSelector month={month} year={year} onPrev={goToPrev} onNext={goToNext} />
         <HelpButton
           title="Como usar as Contas"
@@ -232,63 +233,54 @@ export function MonthlyBills() {
             { icon: '➕', title: 'Adicionar conta', description: 'Use o botão + no canto inferior para cadastrar uma nova conta no mês.' },
           ]}
         />
+      </header>
+
+      <div className="card !py-2.5 !px-4 flex items-center gap-2.5">
+        <Search size={16} className="text-[var(--color-text-tertiary)] flex-shrink-0" />
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Pesquisar contas e dívidas do mês"
+          className="w-full bg-transparent outline-none text-sm placeholder:text-[var(--color-text-tertiary)]"
+        />
+        {searchTerm && (
+          <button
+            onClick={() => setSearchTerm('')}
+            className="text-xs text-[var(--color-primary)] font-bold flex-shrink-0"
+          >
+            Limpar
+          </button>
+        )}
       </div>
 
-      <div className="card py-3">
-        <div className="flex items-center gap-2">
-          <Search size={16} className="text-[var(--color-text-secondary)]" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Pesquisar contas e dívidas do mês"
-            className="w-full bg-transparent outline-none text-sm"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="text-xs text-[var(--color-primary)] font-semibold"
-            >
-              Limpar
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Summary bar */}
-      <div className="flex justify-between items-center card py-3">
-        <div className="text-center">
-          <p className="text-xs text-[var(--color-text-secondary)]">Total</p>
-          <p className="text-sm font-bold">{formatCurrency(totalDue)}</p>
-        </div>
-        <div className="text-center">
-          <p className="text-xs text-[var(--color-text-secondary)]">Pago</p>
-          <p className="text-sm font-bold text-[var(--color-success)]">{formatCurrency(totalPaid)}</p>
-        </div>
-        <div className="text-center">
-          <p className="text-xs text-[var(--color-text-secondary)]">Pendente</p>
-          <p className="text-sm font-bold text-[var(--color-danger)]">{formatCurrency(totalDue - totalPaid)}</p>
-        </div>
+      {/* Totais do mês */}
+      <div className="card grid grid-cols-3 divide-x divide-[var(--color-border)]">
+        <Total label="Total" value={totalDue} />
+        <Total label="Pago" value={totalPaid} color="var(--color-success)" />
+        <Total label="Pendente" value={totalDue - totalPaid} color="var(--color-danger)" />
       </div>
 
       {isSelectionMode && (
-        <div className="card flex items-center justify-between">
+        <div className="card card-feature flex items-center justify-between gap-3 animate-rise">
           <div>
-            <p className="text-xs text-[var(--color-text-secondary)]">Selecionadas</p>
-            <p className="text-lg font-bold">{selectedIds.length}</p>
+            <p className="label-caps">Selecionadas</p>
+            <p className="text-xl font-extrabold tnum">{selectedIds.length}</p>
           </div>
           <div className="text-right">
-            <p className="text-xs text-[var(--color-text-secondary)]">Total selecionado</p>
-            <p className="text-lg font-bold text-[var(--color-primary)]">{formatCurrency(selectedTotal)}</p>
+            <p className="label-caps">Total selecionado</p>
+            <p className="text-xl font-extrabold tnum text-[var(--color-primary)]">
+              {formatCurrency(selectedTotal)}
+            </p>
           </div>
-          <button onClick={clearSelection} className="btn-secondary py-2 px-3 text-sm">
+          <button onClick={clearSelection} className="btn-secondary !py-2 !px-4 text-sm">
             Limpar
           </button>
         </div>
       )}
 
       {/* Bills list */}
-      <div className="space-y-2 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+      <div className="grid gap-2.5 md:grid-cols-2 stagger">
         {filteredBills.map((bill) => (
           <BillItem
             key={bill.id}
@@ -328,11 +320,19 @@ export function MonthlyBills() {
           </div>
         )}
         {!isLoading && filteredBills.length === 0 && filteredRecurringForMonth.length === 0 && (
-          <p className="text-center text-[var(--color-text-secondary)] py-8 md:col-span-2">
-            {normalizedSearch
-              ? `Nenhuma conta encontrada para "${searchTerm}"`
-              : 'Nenhuma conta cadastrada para este mês'}
-          </p>
+          <div className="text-center py-12 md:col-span-2">
+            <p className="text-4xl mb-3">{normalizedSearch ? '🔍' : '🧾'}</p>
+            <p className="text-sm font-semibold">
+              {normalizedSearch
+                ? `Nada encontrado para "${searchTerm}"`
+                : 'Nenhuma conta neste mês'}
+            </p>
+            {!normalizedSearch && (
+              <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
+                Toque no + para cadastrar a primeira
+              </p>
+            )}
+          </div>
         )}
       </div>
 
@@ -354,9 +354,14 @@ export function MonthlyBills() {
           setEditingBill(null);
           setShowForm(true);
         }}
-        className="fixed bottom-20 md:bottom-8 right-4 md:right-8 w-14 h-14 bg-[var(--color-primary)] text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 hover:bg-[var(--color-primary-dark)] transition-all z-40"
+        aria-label="Nova conta"
+        className="fixed bottom-24 md:bottom-8 right-4 md:right-8 w-14 h-14 text-white rounded-2xl flex items-center justify-center active:scale-90 transition-transform duration-150 z-40"
+        style={{
+          background: 'linear-gradient(135deg, var(--color-primary), var(--color-accent))',
+          boxShadow: 'var(--shadow-primary)',
+        }}
       >
-        <Plus size={28} />
+        <Plus size={26} strokeWidth={2.5} />
       </button>
 
       {/* Form modal */}
@@ -375,3 +380,18 @@ export function MonthlyBills() {
   );
 }
 
+
+/** Uma das três colunas da barra de totais do mês. */
+function Total({ label, value, color }: { label: string; value: number; color?: string }) {
+  return (
+    <div className="text-center px-1">
+      <p className="label-caps">{label}</p>
+      <AnimatedCurrency
+        value={value}
+        className="money-lg text-[15px] block mt-0.5"
+        durationMs={500}
+        style={color ? { color } : undefined}
+      />
+    </div>
+  );
+}

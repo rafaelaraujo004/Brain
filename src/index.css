@@ -2,79 +2,464 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   Sistema de design — Paguei
+   --------------------------------------------------------------------------
+   Escuro por padrão, claro com o mesmo cuidado (não é o escuro invertido).
+   Três ideias guiam tudo:
+
+   1. O número é o herói. É um app de dinheiro: valores usam algarismos de
+      largura fixa (tabular) para as colunas alinharem e o olho comparar sem
+      esforço, com tracking negativo nos tamanhos grandes.
+   2. Profundidade vem da luz, não de traço. As superfícies têm uma borda
+      superior clara (o "brilho de vidro") e sombra difusa embaixo, em vez de
+      um contorno de 1px uniforme.
+   3. Cor é semântica, nunca decoração. Violeta = ação, esmeralda = pago,
+      rosa = vencido, âmbar = adiado. Se está colorido, significa algo.
+   ========================================================================== */
+
 @layer base {
   :root {
-    --color-bg: #f8fafc;
+    /* --- Superfícies (claro) ------------------------------------------- */
+    --color-bg: #f7f7f9;
+    --bg-glow-1: rgba(124, 58, 237, 0.10);
+    --bg-glow-2: rgba(16, 185, 129, 0.07);
     --color-surface: #ffffff;
-    --color-surface-2: #f1f5f9;
-    --color-text: #0f172a;
-    --color-text-secondary: #64748b;
-    --color-border: #e2e8f0;
-    --color-primary: #3b82f6;
-    --color-primary-dark: #2563eb;
-    --color-success: #22c55e;
-    --color-danger: #ef4444;
-    --color-warning: #f59e0b;
+    --color-surface-2: #f1f1f5;
+    --color-surface-3: #e8e8ee;
+    --surface-glass: rgba(255, 255, 255, 0.72);
+    --surface-elevated: #ffffff;
+
+    /* --- Traço e brilho ------------------------------------------------- */
+    --color-border: rgba(9, 9, 17, 0.09);
+    --border-strong: rgba(9, 9, 17, 0.16);
+    --edge-highlight: rgba(255, 255, 255, 0.9);
+
+    /* --- Texto ---------------------------------------------------------- */
+    --color-text: #0b0b12;
+    --color-text-secondary: #63637a;
+    --color-text-tertiary: #8e8ea8;
+
+    /* --- Acentos -------------------------------------------------------- */
+    --color-primary: #6d28d9;
+    --color-primary-dark: #5b21b6;
+    --color-primary-soft: rgba(109, 40, 217, 0.10);
+    --color-accent: #c026d3;
+    --color-success: #059669;
+    --color-success-soft: rgba(5, 150, 105, 0.10);
+    --color-danger: #e11d48;
+    --color-danger-soft: rgba(225, 29, 72, 0.10);
+    --color-warning: #d97706;
+    --color-warning-soft: rgba(217, 119, 6, 0.12);
+
+    /* --- Sombras -------------------------------------------------------- */
+    --shadow-sm: 0 1px 2px rgba(9, 9, 17, 0.05), 0 1px 1px rgba(9, 9, 17, 0.03);
+    --shadow-md: 0 4px 14px -4px rgba(9, 9, 17, 0.10), 0 2px 6px -2px rgba(9, 9, 17, 0.05);
+    --shadow-lg: 0 18px 40px -12px rgba(9, 9, 17, 0.18), 0 6px 14px -6px rgba(9, 9, 17, 0.08);
+    --shadow-primary: 0 8px 26px -8px rgba(109, 40, 217, 0.45);
+
+    /* --- Movimento ------------------------------------------------------ */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --dur-fast: 140ms;
+    --dur-base: 240ms;
+    --dur-slow: 520ms;
   }
 
   .dark {
-    --color-bg: #0f172a;
-    --color-surface: #1e293b;
-    --color-surface-2: #334155;
-    --color-text: #f1f5f9;
-    --color-text-secondary: #94a3b8;
-    --color-border: #334155;
-    --color-primary: #3b82f6;
-    --color-primary-dark: #60a5fa;
-    --color-success: #22c55e;
-    --color-danger: #ef4444;
-    --color-warning: #f59e0b;
+    /* --- Superfícies (escuro) ------------------------------------------ */
+    --color-bg: #08080d;
+    --bg-glow-1: rgba(139, 92, 246, 0.16);
+    --bg-glow-2: rgba(16, 185, 129, 0.09);
+    --color-surface: rgba(255, 255, 255, 0.035);
+    --color-surface-2: rgba(255, 255, 255, 0.06);
+    --color-surface-3: rgba(255, 255, 255, 0.10);
+    --surface-glass: rgba(18, 18, 27, 0.72);
+    --surface-elevated: #14141d;
+
+    --color-border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --edge-highlight: rgba(255, 255, 255, 0.14);
+
+    --color-text: #f4f4f7;
+    --color-text-secondary: #a1a1b5;
+    --color-text-tertiary: #6e6e85;
+
+    --color-primary: #8b5cf6;
+    --color-primary-dark: #a78bfa;
+    --color-primary-soft: rgba(139, 92, 246, 0.16);
+    --color-accent: #e879f9;
+    --color-success: #34d399;
+    --color-success-soft: rgba(52, 211, 153, 0.14);
+    --color-danger: #fb7185;
+    --color-danger-soft: rgba(251, 113, 133, 0.14);
+    --color-warning: #fbbf24;
+    --color-warning-soft: rgba(251, 191, 36, 0.14);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 6px 18px -6px rgba(0, 0, 0, 0.6);
+    --shadow-lg: 0 24px 50px -16px rgba(0, 0, 0, 0.75);
+    --shadow-primary: 0 10px 34px -10px rgba(139, 92, 246, 0.55);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
-    @apply bg-[var(--color-bg)] text-[var(--color-text)] transition-colors duration-200;
-    font-family: 'Manrope', 'Segoe UI', sans-serif;
+    @apply bg-[var(--color-bg)] text-[var(--color-text)];
+    font-family: 'Manrope', 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     -webkit-tap-highlight-color: transparent;
     overscroll-behavior: none;
+    font-feature-settings: 'ss01', 'cv01';
+    transition: background-color var(--dur-base) var(--ease-out),
+                color var(--dur-base) var(--ease-out);
+  }
+
+  /* Luz ambiente atrás do conteúdo. Fixa, para não acompanhar o scroll —
+     é iluminação da tela, não um elemento da página. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(70ch 60ch at 12% -12%, var(--bg-glow-1), transparent 70%),
+      radial-gradient(60ch 50ch at 92% 4%, var(--bg-glow-2), transparent 68%);
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Algarismos de largura fixa em tudo que é dinheiro, data ou contagem. */
+  .tnum,
+  input[inputmode='decimal'],
+  input[type='number'] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'ss01';
+  }
+
+  ::selection {
+    background: var(--color-primary-soft);
+    color: var(--color-text);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+    border-radius: 6px;
   }
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-border) transparent;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-tertiary);
+    background-clip: content-box;
   }
 }
 
 @layer components {
+  /* --- Superfície base ------------------------------------------------- */
   .card {
-    @apply bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)] p-4;
+    position: relative;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 20px;
+    padding: 1rem;
+    box-shadow: var(--shadow-md);
+    transition: border-color var(--dur-base) var(--ease-out),
+                box-shadow var(--dur-base) var(--ease-out),
+                transform var(--dur-base) var(--ease-out);
   }
 
+  /* O fio de luz na aresta superior é o que faz a superfície parecer vidro
+     em vez de um retângulo pintado. */
+  .card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    border-radius: 20px 20px 0 0;
+    background: linear-gradient(90deg, transparent, var(--edge-highlight), transparent);
+    pointer-events: none;
+  }
+
+  .dark .card {
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+  }
+
+  .card-interactive {
+    cursor: pointer;
+  }
+  .card-interactive:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-lg);
+  }
+  .card-interactive:active {
+    transform: scale(0.99);
+  }
+
+  /* Cartão em destaque: o mesmo vidro, com a cor da marca por baixo. */
+  .card-feature {
+    background:
+      linear-gradient(160deg, var(--color-primary-soft), transparent 55%),
+      var(--color-surface);
+  }
+
+  /* --- Botões ----------------------------------------------------------- */
   .btn-primary {
-    @apply bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-150 active:scale-95;
+    @apply font-semibold py-3 px-6 rounded-2xl text-white;
+    background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
+    box-shadow: var(--shadow-primary);
+    transition: transform var(--dur-fast) var(--ease-out),
+                box-shadow var(--dur-base) var(--ease-out),
+                filter var(--dur-fast) var(--ease-out);
+  }
+  .btn-primary:hover {
+    filter: brightness(1.08);
+  }
+  .btn-primary:active {
+    transform: scale(0.97);
   }
 
   .btn-secondary {
-    @apply bg-[var(--color-surface-2)] text-[var(--color-text)] font-semibold py-3 px-6 rounded-xl transition-colors duration-150 active:scale-95 border border-[var(--color-border)];
+    @apply font-semibold py-3 px-6 rounded-2xl;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    transition: transform var(--dur-fast) var(--ease-out),
+                background-color var(--dur-base) var(--ease-out),
+                border-color var(--dur-base) var(--ease-out);
+  }
+  .btn-secondary:hover {
+    background: var(--color-surface-3);
+    border-color: var(--border-strong);
+  }
+  .btn-secondary:active {
+    transform: scale(0.97);
   }
 
+  /* Botão de ação circular dentro dos cartões. */
+  .btn-icon {
+    @apply w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0;
+    transition: transform var(--dur-fast) var(--ease-spring),
+                background-color var(--dur-fast) var(--ease-out);
+  }
+  .btn-icon:active {
+    transform: scale(0.88);
+  }
+
+  /* --- Campos ----------------------------------------------------------- */
   .input-field {
-    @apply w-full bg-[var(--color-surface-2)] text-[var(--color-text)] border border-[var(--color-border)] rounded-xl px-4 py-3 outline-none transition-all duration-150;
+    @apply w-full rounded-2xl px-4 py-3 outline-none;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    transition: border-color var(--dur-fast) var(--ease-out),
+                box-shadow var(--dur-fast) var(--ease-out),
+                background-color var(--dur-fast) var(--ease-out);
   }
-
+  .input-field::placeholder {
+    color: var(--color-text-tertiary);
+  }
   .input-field:focus {
     border-color: var(--color-primary);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    box-shadow: 0 0 0 4px var(--color-primary-soft);
   }
 
-  .badge-pending {
-    @apply bg-red-500/15 text-red-500 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  /* --- Selos ------------------------------------------------------------ */
+  .badge {
+    @apply inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full uppercase;
+    letter-spacing: 0.04em;
   }
-
   .badge-paid {
-    @apply bg-green-500/15 text-green-500 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide;
+    @apply badge;
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+  .badge-pending {
+    @apply badge;
+    background: var(--color-surface-2);
+    color: var(--color-text-secondary);
+  }
+  .badge-overdue {
+    @apply badge;
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+  .badge-postponed {
+    @apply badge;
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
   }
 
-  .badge-overdue {
-    @apply bg-orange-500/15 text-orange-500 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  /* --- Tipografia de valores ------------------------------------------- */
+  .money-hero {
+    @apply tnum font-extrabold;
+    font-size: clamp(2rem, 8vw, 2.75rem);
+    line-height: 1.05;
+    letter-spacing: -0.035em;
+  }
+  .money-lg {
+    @apply tnum font-bold;
+    letter-spacing: -0.02em;
+  }
+
+  /* Texto com o gradiente da marca — só para o número principal da tela. */
+  .text-gradient {
+    background: linear-gradient(135deg, var(--color-text) 20%, var(--color-primary) 120%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .label-caps {
+    @apply text-[11px] font-semibold uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-tertiary);
+  }
+
+  /* --- Barra segmentada (composição do orçamento) ----------------------- */
+  .meter {
+    @apply w-full rounded-full overflow-hidden flex;
+    height: 10px;
+    background: var(--color-surface-2);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.15);
+  }
+  .meter > * {
+    transition: width var(--dur-slow) var(--ease-out);
+  }
+}
+
+@layer utilities {
+  /* --- Entradas --------------------------------------------------------- */
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes sheet-up {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  .animate-rise {
+    animation: rise-in var(--dur-base) var(--ease-out) both;
+  }
+  .animate-fade {
+    animation: fade-in var(--dur-base) var(--ease-out) both;
+  }
+  .animate-scale-in {
+    animation: scale-in var(--dur-base) var(--ease-out) both;
+  }
+  .animate-sheet {
+    animation: sheet-up 320ms var(--ease-out) both;
+  }
+
+  /* Entrada escalonada: cada item da lista entra um pouco depois do
+     anterior, o que dá leitura de ordem em vez de tudo aparecer de uma vez.
+     Cortado no 12º item para listas longas não terem espera perceptível. */
+  .stagger > * {
+    animation: rise-in var(--dur-base) var(--ease-out) both;
+  }
+  .stagger > *:nth-child(1) { animation-delay: 20ms; }
+  .stagger > *:nth-child(2) { animation-delay: 55ms; }
+  .stagger > *:nth-child(3) { animation-delay: 90ms; }
+  .stagger > *:nth-child(4) { animation-delay: 125ms; }
+  .stagger > *:nth-child(5) { animation-delay: 160ms; }
+  .stagger > *:nth-child(6) { animation-delay: 195ms; }
+  .stagger > *:nth-child(7) { animation-delay: 230ms; }
+  .stagger > *:nth-child(8) { animation-delay: 260ms; }
+  .stagger > *:nth-child(n + 9) { animation-delay: 290ms; }
+
+  /* Brilho que percorre o esqueleto de carga. */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--color-surface-2);
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--color-surface-3),
+      transparent
+    );
+    animation: shimmer 1.6s infinite;
+  }
+
+  .glass {
+    background: var(--surface-glass);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+  }
+
+  /* Respeita quem pediu menos movimento no sistema. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
