@@ -145,6 +145,43 @@ class AppDatabase extends Dexie {
         });
       }
     });
+
+    // v7: contas mensais. Cada ocorrência carrega o id da série para que as
+    // competências seguintes saibam que já existe (ou não) uma fatura daquele
+    // mês.
+    this.version(7).stores({
+      bills: '++id, [month+year], recurringDebtId, status, dueDay, carriedFromBillId, [originYear+originMonth], postponedAt, seriesId, isMonthly',
+      recurringDebts: '++id, isActive',
+      extraFunds: '++id, [month+year]',
+      monthlyConfigs: '++id, [month+year]',
+      incomeSources: '++id, isActive',
+      settings: '++id',
+      priorities: '++id, keyword, level',
+    }).upgrade(async (tx) => {
+      const billsTable = tx.table('bills');
+      const all: Bill[] = await billsTable.toArray();
+      const byId = new Map<number, Bill>();
+      for (const b of all) if (b.id) byId.set(b.id, b);
+
+      // A série de uma conta antiga é a raiz da cadeia de adiamentos: todas
+      // as contas que vieram de um mesmo original pertencem à mesma série.
+      for (const bill of all) {
+        if (!bill.id || bill.seriesId) continue;
+
+        let rootId = bill.id;
+        const seen = new Set<number>([bill.id]);
+        let cursor: Bill | undefined = bill;
+        while (cursor?.carriedFromBillId && !seen.has(cursor.carriedFromBillId)) {
+          seen.add(cursor.carriedFromBillId);
+          const previous: Bill | undefined = byId.get(cursor.carriedFromBillId);
+          if (!previous?.id) break;
+          rootId = previous.id;
+          cursor = previous;
+        }
+
+        await billsTable.update(bill.id, { seriesId: rootId });
+      }
+    });
   }
 }
 
@@ -649,6 +686,10 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
       observation: prevBill.observation,
       month,
       year,
+      // A fatura adiada continua pertencendo à mesma série mensal, mas deixa
+      // de gerar novas: quem gera é a ocorrência da competência, não esta.
+      isMonthly: prevBill.isMonthly,
+      seriesId: prevBill.seriesId ?? prevBill.id,
       carriedFromBillId: prevBill.id,
       carriedFromMonth: prev.month,
       carriedFromYear: prev.year,
@@ -661,6 +702,133 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
   }
 
   return newCarryOvers.length;
+}
+
+/** Chave de competência, para comparar meses como texto ordenável. */
+function competenceKey(month: number, year: number): string {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+/**
+ * Garante que toda conta marcada como mensal tenha a fatura da competência
+ * pedida.
+ *
+ * É isto que faz o adiamento acumular: adiar a energia de junho move aquela
+ * dívida para julho, mas julho gera a própria fatura de julho do mesmo jeito.
+ * Três meses sem pagar viram três dívidas, cada uma com o mês de origem.
+ *
+ * Uma ocorrência é identificada por (série + competência de origem), e não
+ * pelo mês onde ela está hoje — uma fatura de junho adiada para setembro
+ * continua sendo a de junho, então junho não gera outra.
+ *
+ * Devolve quantas faturas foram criadas.
+ */
+export async function ensureMonthlyBillOccurrences(
+  month: number,
+  year: number
+): Promise<number> {
+  const today = new Date();
+  const currentKey = competenceKey(today.getMonth() + 1, today.getFullYear());
+  const targetKey = competenceKey(month, year);
+
+  // Não inventa fatura de mês que ainda não chegou.
+  if (targetKey > currentKey) return 0;
+
+  const monthlyBills = await db.bills.filter((b) => b.isMonthly === true).toArray();
+  if (monthlyBills.length === 0) return 0;
+
+  interface SeriesInfo {
+    startKey: string;
+    /** Ocorrência mais recente, usada como molde (valor e dia podem ter mudado) */
+    template: Bill;
+    templateKey: string;
+    origins: Set<string>;
+  }
+
+  const series = new Map<number, SeriesInfo>();
+
+  for (const bill of monthlyBills) {
+    const seriesId = bill.seriesId ?? bill.id;
+    if (!seriesId) continue;
+
+    const originMonth = bill.originMonth ?? bill.month;
+    const originYear = bill.originYear ?? bill.year;
+    const key = competenceKey(originMonth, originYear);
+
+    const existing = series.get(seriesId);
+    if (!existing) {
+      series.set(seriesId, {
+        startKey: key,
+        template: bill,
+        templateKey: key,
+        origins: new Set([key]),
+      });
+      continue;
+    }
+
+    existing.origins.add(key);
+    if (key < existing.startKey) existing.startKey = key;
+    if (key > existing.templateKey) {
+      existing.template = bill;
+      existing.templateKey = key;
+    }
+  }
+
+  const newOccurrences: Bill[] = [];
+
+  for (const [seriesId, info] of series) {
+    // A série ainda não tinha começado nesta competência.
+    if (targetKey < info.startKey) continue;
+    // Esta competência já tem a fatura dela (mesmo que adiada para outro mês).
+    if (info.origins.has(targetKey)) continue;
+
+    const template = info.template;
+    const description = template.originalDescription ?? template.description;
+
+    newOccurrences.push({
+      description,
+      originalDescription: description,
+      initialValue: template.initialValue,
+      finalValue: template.finalValue,
+      status: 'pending',
+      dueDay: template.dueDay,
+      observation: '',
+      month,
+      year,
+      isMonthly: true,
+      seriesId,
+      originMonth: month,
+      originYear: year,
+      originalDueDate: buildDueDate(month, year, template.dueDay).toISOString(),
+      postponeHistory: [],
+    });
+  }
+
+  if (newOccurrences.length > 0) {
+    await db.bills.bulkAdd(newOccurrences);
+  }
+
+  return newOccurrences.length;
+}
+
+/**
+ * Liga ou desliga a repetição mensal de uma série inteira.
+ *
+ * A marcação vive em todas as ocorrências, então desmarcar numa delas precisa
+ * valer para as irmãs — senão a série continuaria gerando faturas a partir de
+ * qualquer ocorrência que ainda estivesse marcada.
+ */
+export async function setBillSeriesMonthly(
+  seriesId: number,
+  isMonthly: boolean
+): Promise<void> {
+  const siblings = await db.bills.where('seriesId').equals(seriesId).toArray();
+  const ids = siblings.map((b) => b.id).filter((id): id is number => typeof id === 'number');
+  if (ids.length === 0) return;
+
+  await db.bills.bulkUpdate(ids.map((key) => ({ key, changes: { isMonthly } })));
+  markLocalChanged();
+  scheduleCloudSync();
 }
 
 function getNextMonthYear(month: number, year: number): { month: number; year: number } {
@@ -844,6 +1012,8 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
     observation: bill.observation,
     month: next.month,
     year: next.year,
+    isMonthly: bill.isMonthly,
+    seriesId: bill.seriesId ?? bill.id,
     carriedFromBillId: bill.id,
     carriedFromMonth: bill.month,
     carriedFromYear: bill.year,

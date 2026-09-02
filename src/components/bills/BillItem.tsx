@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Check, Trash2, Edit3, ArrowRight, Undo, Clock } from 'lucide-react';
+import { Check, Trash2, Edit3, ArrowRight, Undo, Clock, Repeat } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { formatPostponeSummary, formatPostponeTimeline, getPostponeStatus } from '../../utils/bills';
 import type { Bill } from '../../types';
@@ -122,13 +122,22 @@ export function BillItem({
         </button>
 
         <div className="flex-1 min-w-0">
-          <p
-            className={`text-sm font-semibold truncate ${
-              isPaid ? 'line-through text-[var(--color-text-secondary)]' : ''
-            }`}
-          >
-            {bill.originalDescription ?? bill.description}
-          </p>
+          <div className="flex items-center gap-1.5">
+            {bill.isMonthly && (
+              <Repeat
+                size={11}
+                className="text-[var(--color-primary)] flex-shrink-0"
+                aria-label="Conta mensal"
+              />
+            )}
+            <p
+              className={`text-sm font-semibold truncate ${
+                isPaid ? 'line-through text-[var(--color-text-secondary)]' : ''
+              }`}
+            >
+              {bill.originalDescription ?? bill.description}
+            </p>
+          </div>
 
           <div className="flex items-center gap-x-2 gap-y-0.5 mt-1 flex-wrap">
             <span className="text-[11px] text-[var(--color-text-tertiary)] tnum">

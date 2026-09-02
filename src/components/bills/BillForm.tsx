@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { X } from 'lucide-react';
-import { db, updateBillStatusWithSync } from '../../db/database';
+import { X, Check } from 'lucide-react';
+import { db, setBillSeriesMonthly, updateBillStatusWithSync } from '../../db/database';
 import { buildDueDate } from '../../utils/formatters';
 import type { Bill } from '../../types';
 
@@ -22,6 +22,7 @@ export function BillForm({
   const [dueDay, setDueDay] = useState(bill?.dueDay?.toString() ?? '');
   const [observation, setObservation] = useState(bill?.observation ?? '');
   const [status, setStatus] = useState<'pending' | 'paid' | 'skipped'>(bill?.status ?? 'pending');
+  const [isMonthly, setIsMonthly] = useState(bill?.isMonthly ?? false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,15 +45,22 @@ export function BillForm({
     if (bill?.id) {
       await db.bills.update(bill.id, { ...data, status: bill.status });
       await updateBillStatusWithSync(bill.id, status);
+      // A marcação vale para a série inteira, não só para esta competência.
+      if (isMonthly !== (bill.isMonthly ?? false)) {
+        await setBillSeriesMonthly(bill.seriesId ?? bill.id, isMonthly);
+      }
     } else {
       const day = parseInt(dueDay) || 1;
-      await db.bills.add({
+      const newId = await db.bills.add({
         ...data,
+        isMonthly,
         originMonth: month,
         originYear: year,
         originalDueDate: buildDueDate(month, year, day).toISOString(),
         postponeHistory: [],
       });
+      // A primeira ocorrência dá nome à série.
+      await db.bills.update(newId as number, { seriesId: newId as number });
     }
 
     onClose();
@@ -146,6 +154,39 @@ export function BillForm({
             onChange={(e) => setObservation(e.target.value)}
             className="input-field"
           />
+
+          {/* Repetição mensal. Precisa explicar o efeito no adiamento, porque
+              é aí que a diferença aparece: adiar uma conta mensal não some
+              com a fatura do mês seguinte — as duas passam a ser devidas. */}
+          <button
+            type="button"
+            onClick={() => setIsMonthly((v) => !v)}
+            aria-pressed={isMonthly}
+            className="w-full flex items-start gap-3 p-3.5 rounded-2xl border text-left transition-colors duration-200"
+            style={{
+              background: isMonthly ? 'var(--color-primary-soft)' : 'var(--color-surface-2)',
+              borderColor: isMonthly ? 'var(--color-primary)' : 'var(--color-border)',
+            }}
+          >
+            <span
+              className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5 transition-all duration-200"
+              style={{
+                background: isMonthly ? 'var(--color-primary)' : 'transparent',
+                border: isMonthly ? 'none' : '1.5px solid var(--color-text-tertiary)',
+                color: '#fff',
+              }}
+            >
+              {isMonthly && <Check size={13} strokeWidth={3.5} />}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">Repete todo mês</span>
+              <span className="block text-[11px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
+                {isMonthly
+                  ? 'Cada mês ganha a própria fatura. Se você adiar uma, ela se soma à do mês seguinte — três meses sem pagar viram três dívidas.'
+                  : 'Conta avulsa: adiar move a mesma dívida para o mês seguinte, sem duplicar.'}
+              </span>
+            </span>
+          </button>
 
           <button type="submit" className="btn-primary w-full">
             {bill ? 'Salvar' : 'Adicionar'}

@@ -4,6 +4,7 @@ import { Plus, Search } from 'lucide-react';
 import {
   db,
   ensureCarryOverBillsForMonth,
+  ensureMonthlyBillOccurrences,
   removeCarryOverForPaidBill,
   skipBillToNextMonth,
   skipRecurringToNextMonth,
@@ -58,16 +59,21 @@ export function MonthlyBills() {
   );
 
   useEffect(() => {
-    // O carry-over automático movia contas em silêncio na virada do mês; o
-    // usuário via a lista mudar sem entender de onde vieram os itens.
-    void ensureCarryOverBillsForMonth(month, year).then((carried) => {
+    void (async () => {
+      // Primeiro as faturas do próprio mês, depois o que ficou para trás —
+      // nesta ordem a conta mensal adiada encontra a fatura nova já criada.
+      await ensureMonthlyBillOccurrences(month, year);
+      const carried = await ensureCarryOverBillsForMonth(month, year);
+
+      // O carry-over automático movia contas em silêncio na virada do mês; o
+      // usuário via a lista mudar sem entender de onde vieram os itens.
       if (carried > 0) {
         showToast({
           message: `${carried} conta${carried > 1 ? 's atrasadas foram trazidas' : ' atrasada foi trazida'} do mês anterior.`,
           tone: 'info',
         });
       }
-    });
+    })();
   }, [month, year, showToast]);
 
   useEffect(() => {

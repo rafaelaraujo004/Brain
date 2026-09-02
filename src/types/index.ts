@@ -43,6 +43,20 @@ export interface Bill {
   postponedAt?: string;
   /** Histórico completo de adiamentos, do mais antigo ao mais recente */
   postponeHistory?: PostponeRecord[];
+  /**
+   * Conta que chega todo mês (energia, água, internet, aluguel).
+   *
+   * Muda o significado do adiamento: numa conta avulsa, adiar move a mesma
+   * dívida para frente. Numa conta mensal, a competência seguinte gera a
+   * própria fatura de qualquer jeito — então a adiada se soma à nova, e
+   * ficar três meses sem pagar significa dever três faturas.
+   */
+  isMonthly?: boolean;
+  /**
+   * Identifica todas as ocorrências da mesma conta mensal ao longo dos meses.
+   * É o id da primeira ocorrência da série.
+   */
+  seriesId?: number;
 }
 
 export interface RecurringDebt {
