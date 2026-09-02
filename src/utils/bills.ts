@@ -1,6 +1,7 @@
 import type { Bill, PostponeRecord, RecurringDebt } from '../types';
 import {
   buildDueDate,
+  daysInMonth,
   daysOverdue,
   formatDate,
   formatOverdueSpan,
@@ -160,6 +161,63 @@ export function getRecurringStatusForMonth(
     dueDate,
     daysLate,
     overdueLabel: formatOverdueSpan(daysLate),
+  };
+}
+
+export interface MonthlyBudget {
+  /** Renda do mês (salário + rendas fixas + fundos extras) */
+  income: number;
+  /** O que já saiu da conta */
+  paid: number;
+  /** Tudo que o mês deve, pago ou não */
+  due: number;
+  /** Quanto ainda não saiu da conta: income - paid */
+  available: number;
+  /** Do que ainda não saiu, quanto já tem destino: due - paid */
+  committed: number;
+  /** O que sobra depois de honrar tudo: income - due. Negativo = falta */
+  free: number;
+  /** true quando as contas do mês passam da renda */
+  isShort: boolean;
+  /** Dias restantes no mês (0 quando a competência não é a atual) */
+  daysLeft: number;
+  /** Quanto dá para gastar por dia com o que sobra livre (0 se não sobra) */
+  perDay: number;
+}
+
+/**
+ * Separa duas perguntas que o painel misturava.
+ *
+ * "Saldo" (income - due) é uma projeção: o que vai sobrar SE tudo for pago.
+ * Não responde a pergunta do dia a dia, que é quanto dinheiro ainda não saiu
+ * da conta (income - paid). Os dois números convivem aqui para a diferença
+ * ficar explícita.
+ */
+export function getMonthlyBudget(
+  income: number,
+  paid: number,
+  due: number,
+  month: number,
+  year: number,
+  today: Date = startOfToday()
+): MonthlyBudget {
+  const available = income - paid;
+  const committed = Math.max(0, due - paid);
+  const free = income - due;
+
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === month;
+  const daysLeft = isCurrentMonth ? daysInMonth(month, year) - today.getDate() + 1 : 0;
+
+  return {
+    income,
+    paid,
+    due,
+    available,
+    committed,
+    free,
+    isShort: free < 0,
+    daysLeft,
+    perDay: daysLeft > 0 && free > 0 ? free / daysLeft : 0,
   };
 }
 

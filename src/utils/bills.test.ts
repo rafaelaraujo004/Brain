@@ -4,6 +4,7 @@ import {
   formatPostponeSummary,
   formatPostponeTimeline,
   getOriginMonthYear,
+  getMonthlyBudget,
   getPostponeStatus,
   getRecurringStatusForMonth,
 } from './bills';
@@ -243,5 +244,68 @@ describe('getRecurringStatusForMonth', () => {
   it('não marca atraso antes do vencimento', () => {
     // Parcela 4 vence 10/09 e hoje é 02/09.
     expect(getRecurringStatusForMonth(debt, 9, 2026, TODAY).status).toBe('pending');
+  });
+});
+
+describe('getMonthlyBudget', () => {
+  // Setembro/2026 tem 30 dias e TODAY e 02/09 -> 29 dias restantes.
+  const budget = (income: number, paid: number, due: number, month = 9, year = 2026) =>
+    getMonthlyBudget(income, paid, due, month, year, TODAY);
+
+  it('separa o que ainda nao saiu da conta do que sobra no fim', () => {
+    const b = budget(3000, 1299, 1899);
+    // Dinheiro ainda em maos: 3000 - 1299.
+    expect(b.available).toBe(1701);
+    // Do que resta, 600 ja tem destino.
+    expect(b.committed).toBe(600);
+    // O que sobra depois de honrar tudo.
+    expect(b.free).toBe(1101);
+    expect(b.isShort).toBe(false);
+  });
+
+  it('nao confunde "resta" com "livre" quando nada foi pago ainda', () => {
+    const b = budget(3000, 0, 1899);
+    expect(b.available).toBe(3000);
+    expect(b.free).toBe(1101);
+  });
+
+  it('quando tudo esta pago, o que resta e o que sobra coincidem', () => {
+    const b = budget(3000, 1899, 1899);
+    expect(b.available).toBe(1101);
+    expect(b.free).toBe(1101);
+    expect(b.committed).toBe(0);
+  });
+
+  it('acusa quando as contas passam da renda', () => {
+    const b = budget(3000, 1299, 3899);
+    expect(b.isShort).toBe(true);
+    expect(b.free).toBe(-899);
+    // Ainda ha dinheiro em caixa, mas todo comprometido.
+    expect(b.available).toBe(1701);
+    expect(b.committed).toBe(2600);
+    expect(b.perDay).toBe(0);
+  });
+
+  it('divide o que sobra pelos dias restantes do mes', () => {
+    const b = budget(3000, 1299, 1899);
+    expect(b.daysLeft).toBe(29);
+    expect(b.perDay).toBeCloseTo(1101 / 29, 5);
+  });
+
+  it('nao sugere gasto diario fora do mes corrente', () => {
+    const passado = budget(3000, 0, 1000, 6, 2026);
+    const futuro = budget(3000, 0, 1000, 12, 2026);
+    expect(passado.daysLeft).toBe(0);
+    expect(passado.perDay).toBe(0);
+    expect(futuro.perDay).toBe(0);
+    // O calculo de sobra continua valendo em qualquer competencia.
+    expect(passado.free).toBe(2000);
+  });
+
+  it('nunca reporta comprometido negativo', () => {
+    // Pagamento acima do devido (ex.: valor final editado depois de pago).
+    const b = budget(3000, 2000, 1500);
+    expect(b.committed).toBe(0);
+    expect(b.available).toBe(1000);
   });
 });

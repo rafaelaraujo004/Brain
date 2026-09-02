@@ -8,6 +8,7 @@ import { MonthSelector } from '../components/MonthSelector';
 import { useEffect, useState, useMemo } from 'react';
 import { HelpButton } from '../components/HelpModal';
 import { ListSkeleton } from '../components/PageSpinner';
+import { RemainingIncomeCard } from '../components/RemainingIncomeCard';
 
 interface UnifiedItem {
   id: string;
@@ -208,6 +209,14 @@ export function Dashboard() {
           bgColor={difference >= 0 ? 'bg-green-500/10' : 'bg-red-500/10'}
         />
       </div>
+
+      <RemainingIncomeCard
+        totalIncome={totalIncome}
+        totalPaid={totalPaid}
+        totalDue={totalDue}
+        month={month}
+        year={year}
+      />
 
       <div className="card flex items-center justify-between">
         <div className="min-w-0">
