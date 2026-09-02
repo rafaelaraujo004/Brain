@@ -1,11 +1,11 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { TrendingUp, TrendingDown, Wallet, DollarSign, AlertTriangle, RefreshCw } from 'lucide-react';
 import { db, getOrCreateSettings, ensureCarryOverBillsForMonth, ensureMonthlyConfig } from '../db/database';
-import { formatCurrency } from '../utils/formatters';
+import { formatCurrency, formatDate } from '../utils/formatters';
+import { getPostponeStatus, getRecurringStatusForMonth } from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import { useEffect, useState, useMemo } from 'react';
-import type { RecurringDebt } from '../types';
 import { HelpButton } from '../components/HelpModal';
 
 interface UnifiedItem {
@@ -13,35 +13,14 @@ interface UnifiedItem {
   description: string;
   value: number;
   dueDay: number;
+  dueDate: Date;
   status: 'paid' | 'pending' | 'overdue';
   type: 'bill' | 'recurring';
   installmentInfo?: string;
-}
-
-function getRecurringStatusForMonth(
-  debt: RecurringDebt,
-  month: number,
-  year: number
-): { applies: boolean; status: 'paid' | 'pending' | 'overdue'; installmentNumber: number } {
-  const monthsSinceStart = (year - debt.startYear) * 12 + (month - debt.startMonth);
-  const installmentNumber = monthsSinceStart + 1;
-
-  if (installmentNumber < 1 || installmentNumber > debt.totalInstallments) {
-    return { applies: false, status: 'pending', installmentNumber: 0 };
-  }
-
-  const isPaid = debt.paidInstallments >= installmentNumber;
-  if (isPaid) return { applies: true, status: 'paid', installmentNumber };
-
-  const today = new Date();
-  const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === month;
-  const isOverdue = isCurrentMonth && today.getDate() > debt.dueDay;
-
-  return {
-    applies: true,
-    status: isOverdue ? 'overdue' : 'pending',
-    installmentNumber,
-  };
+  /** Quantas vezes a conta já foi adiada (0 quando nunca foi) */
+  postponedTimes: number;
+  /** "há 2 meses e 4 dias", medido do vencimento original */
+  overdueLabel: string;
 }
 
 export function Dashboard() {
@@ -86,27 +65,25 @@ export function Dashboard() {
       // Skip bills that were postponed
       if (b.status === 'skipped') return;
 
-      const today = new Date();
-      const isOverdue =
-        b.status === 'pending' &&
-        b.year === today.getFullYear() &&
-        b.month === today.getMonth() + 1 &&
-        today.getDate() > b.dueDay;
+      const postpone = getPostponeStatus(b);
 
       items.push({
         id: `bill-${b.id}`,
-        description: b.description,
+        description: b.originalDescription ?? b.description,
         value: b.finalValue,
         dueDay: b.dueDay,
-        status: b.status === 'paid' ? 'paid' : isOverdue ? 'overdue' : 'pending',
+        dueDate: postpone.currentDueDate,
+        status: b.status === 'paid' ? 'paid' : postpone.isLate ? 'overdue' : 'pending',
         type: 'bill',
+        postponedTimes: postpone.times,
+        overdueLabel: postpone.overdueLabel,
       });
     });
 
     // Recurring debts that apply to this month
     recurringDebts?.forEach((d) => {
-      const { applies, status, installmentNumber } = getRecurringStatusForMonth(d, month, year);
-      if (!applies) return;
+      const recurring = getRecurringStatusForMonth(d, month, year);
+      if (!recurring.applies) return;
 
       // Skip if there's already a bill linked to this recurring debt
       const hasLinkedBill = bills?.some((b) => b.recurringDebtId === d.id);
@@ -117,9 +94,12 @@ export function Dashboard() {
         description: d.description,
         value: d.installmentValue,
         dueDay: d.dueDay,
-        status,
+        dueDate: recurring.dueDate,
+        status: recurring.status,
         type: 'recurring',
-        installmentInfo: `${installmentNumber}/${d.totalInstallments}`,
+        installmentInfo: `${recurring.installmentNumber}/${d.totalInstallments}`,
+        postponedTimes: 0,
+        overdueLabel: recurring.overdueLabel,
       });
     });
 
@@ -141,9 +121,15 @@ export function Dashboard() {
 
   const progressPercent = totalDue > 0 ? Math.round((totalPaid / totalDue) * 100) : 0;
 
+  // Atrasadas primeiro e, entre elas, as que já foram mais empurradas —
+  // é a dívida que vem se arrastando que precisa aparecer no topo.
   const upcomingItems = allItems
     .filter((i) => i.status !== 'paid')
-    .sort((a, b) => a.dueDay - b.dueDay)
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'overdue' ? -1 : 1;
+      if (a.postponedTimes !== b.postponedTimes) return b.postponedTimes - a.postponedTimes;
+      return a.dueDate.getTime() - b.dueDate.getTime();
+    })
     .slice(0, 8);
 
   return (
@@ -248,12 +234,21 @@ export function Dashboard() {
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">{item.description}</p>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs text-[var(--color-text-secondary)]">Dia {item.dueDay}</span>
+                        <span className="text-xs text-[var(--color-text-secondary)]">
+                          {formatDate(item.dueDate)}
+                        </span>
                         {item.installmentInfo && (
                           <span className="text-xs text-[var(--color-primary)]">Parcela {item.installmentInfo}</span>
                         )}
+                        {item.postponedTimes > 0 && (
+                          <span className="text-xs text-orange-500 font-medium">
+                            adiada {item.postponedTimes}x
+                          </span>
+                        )}
                         {item.status === 'overdue' && (
-                          <span className="text-xs text-[var(--color-danger)] font-semibold">Atrasado</span>
+                          <span className="text-xs text-[var(--color-danger)] font-semibold">
+                            vencida {item.overdueLabel}
+                          </span>
                         )}
                       </div>
                     </div>

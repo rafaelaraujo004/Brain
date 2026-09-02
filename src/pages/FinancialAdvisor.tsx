@@ -12,9 +12,11 @@ import {
   ChevronDown,
   ChevronUp,
   Settings2,
+  RefreshCw,
 } from 'lucide-react';
 import { db, getOrCreateSettings } from '../db/database';
-import { formatCurrency, getMonthName } from '../utils/formatters';
+import { formatCurrency, getMonthName, startOfToday } from '../utils/formatters';
+import { getPostponeStatus, getRecurringStatusForMonth } from '../utils/bills';
 import type { RecurringDebt, PriorityLevel } from '../types';
 import { HelpButton } from '../components/HelpModal';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
@@ -33,9 +35,41 @@ interface SimItem {
   description: string;
   value: number;
   dueDay: number;
+  dueDate: Date;
   priority: number;
   type: 'bill' | 'recurring';
   selected: boolean;
+  /** Quantas vezes já foi empurrada */
+  postponedTimes: number;
+  /** Dias de atraso em relação ao vencimento original */
+  daysLate: number;
+  overdueLabel: string;
+  /** Desde quando a dívida se arrasta, ex.: "Junho/2026" */
+  originLabel: string;
+}
+
+/**
+ * Peso extra por reincidência. Uma conta que já foi adiada várias vezes é a
+ * que mais corre risco de virar problema, então ela sobe na fila mesmo que a
+ * palavra-chave dela não esteja marcada como prioridade alta.
+ */
+function getPostponePenalty(times: number): number {
+  if (times <= 0) return 0;
+  return Math.min(times, 4) * 3;
+}
+
+/** Janela de urgência: já venceu ou vence nos próximos 3 dias. */
+const CRITICAL_WINDOW_DAYS = 3;
+
+/**
+ * Como o item carrega a data de vencimento absoluta, a urgência não depende
+ * mais de o mês selecionado ser o corrente — o mesmo teste vale para
+ * qualquer competência.
+ */
+function isCriticalItem(item: SimItem, today: Date = startOfToday()): boolean {
+  if (item.daysLate > 0) return true;
+  const daysUntilDue = Math.ceil((item.dueDate.getTime() - today.getTime()) / 86400000);
+  return daysUntilDue >= 0 && daysUntilDue <= CRITICAL_WINDOW_DAYS;
 }
 
 interface PriorityEntry {
@@ -62,11 +96,15 @@ const LEVEL_COLORS: Record<PriorityLevel, { bg: string; text: string; label: str
 const LEVEL_CYCLE: PriorityLevel[] = ['baixa', 'media', 'alta'];
 
 function getRecurringForCurrentMonth(debt: RecurringDebt, month: number, year: number) {
-  const monthsSinceStart = (year - debt.startYear) * 12 + (month - debt.startMonth);
-  const installmentNumber = monthsSinceStart + 1;
-  if (installmentNumber < 1 || installmentNumber > debt.totalInstallments) return null;
-  const isPaid = debt.paidInstallments >= installmentNumber;
-  return { installmentNumber, isPaid };
+  const recurring = getRecurringStatusForMonth(debt, month, year);
+  if (!recurring.applies) return null;
+  return {
+    installmentNumber: recurring.installmentNumber,
+    isPaid: recurring.status === 'paid',
+    dueDate: recurring.dueDate,
+    daysLate: recurring.daysLate,
+    overdueLabel: recurring.overdueLabel,
+  };
 }
 
 export function FinancialAdvisor() {
@@ -138,14 +176,20 @@ export function FinancialAdvisor() {
     bills?.forEach((b) => {
       if (b.status !== 'pending') return;
       const baseDesc = b.originalDescription ?? b.description;
+      const postpone = getPostponeStatus(b);
       items.push({
         id: `bill-${b.id}`,
-        description: b.description,
+        description: baseDesc,
         value: b.finalValue,
         dueDay: b.dueDay,
-        priority: getScore(baseDesc),
+        dueDate: postpone.currentDueDate,
+        priority: getScore(baseDesc) + getPostponePenalty(postpone.times),
         type: 'bill',
         selected: false,
+        postponedTimes: postpone.times,
+        daysLate: postpone.daysLate,
+        overdueLabel: postpone.overdueLabel,
+        originLabel: postpone.originLabel,
       });
     });
 
@@ -160,15 +204,21 @@ export function FinancialAdvisor() {
         description: `${d.description} (${info.installmentNumber}/${d.totalInstallments})`,
         value: d.installmentValue,
         dueDay: d.dueDay,
+        dueDate: info.dueDate,
         priority: getScore(d.description),
         type: 'recurring',
         selected: false,
+        postponedTimes: 0,
+        daysLate: info.daysLate,
+        overdueLabel: info.overdueLabel,
+        originLabel: `${getMonthName(month)}/${year}`,
       });
     });
 
     return items.sort((a, b) => {
       if (b.priority !== a.priority) return b.priority - a.priority;
-      return a.dueDay - b.dueDay;
+      if (b.daysLate !== a.daysLate) return b.daysLate - a.daysLate;
+      return a.dueDate.getTime() - b.dueDate.getTime();
     });
   }, [bills, recurringDebts, month, year, prioMap]);
 
@@ -198,19 +248,43 @@ export function FinancialAdvisor() {
       });
     }
 
-    // Alert: overdue bills
-    const overdueBills = isPastSelectedMonth
-      ? pendingBills
-      : isCurrentSelectedMonth
-      ? pendingBills.filter((b) => b.dueDay < currentDay)
-      : [];
+    // Alert: overdue bills. O atraso vem do vencimento real da conta, então
+    // vale para qualquer competência — inclusive meses anteriores, que antes
+    // dependiam de o mês selecionado ser o corrente.
+    const overdueBills = pendingBills.filter((b) => getPostponeStatus(b).isLate);
     if (overdueBills.length > 0) {
+      const worst = overdueBills
+        .map((b) => ({ bill: b, status: getPostponeStatus(b) }))
+        .sort((a, b) => b.status.daysLate - a.status.daysLate)[0];
+
       tips.push({
         type: 'warning',
         icon: Clock,
-        title: `${overdueBills.length} conta${overdueBills.length > 1 ? 's' : ''} atrasada${overdueBills.length > 1 ? 's' : ''}`,
-        message: `${overdueBills.map((b) => b.description).join(', ')} — total atrasado: ${formatCurrency(overdueBills.reduce((s, b) => s + b.finalValue, 0))}`,
+        title: `${overdueBills.length} conta${overdueBills.length > 1 ? 's' : ''} vencida${overdueBills.length > 1 ? 's' : ''}`,
+        message: `${overdueBills.map((b) => b.originalDescription ?? b.description).join(', ')} — total de ${formatCurrency(overdueBills.reduce((s, b) => s + b.finalValue, 0))}. A mais antiga é ${worst.bill.originalDescription ?? worst.bill.description}, vencida ${worst.status.overdueLabel}.`,
         priority: 90,
+      });
+    }
+
+    // Alert: reincidência. Uma conta empurrada mês após mês é o sinal mais
+    // claro de que o orçamento não está fechando — ela some da lista do mês
+    // sem nunca ser quitada, então precisa ser dita em voz alta.
+    const repeatOffenders = pendingBills
+      .map((b) => ({ bill: b, status: getPostponeStatus(b) }))
+      .filter((entry) => entry.status.times >= 2)
+      .sort((a, b) => b.status.times - a.status.times);
+
+    if (repeatOffenders.length > 0) {
+      const total = repeatOffenders.reduce((s, e) => s + e.bill.finalValue, 0);
+      tips.push({
+        type: 'alert',
+        icon: RefreshCw,
+        title: `${repeatOffenders.length} conta${repeatOffenders.length > 1 ? 's vêm sendo adiadas' : ' vem sendo adiada'} repetidamente`,
+        message: `${repeatOffenders
+          .slice(0, 3)
+          .map((e) => `${e.bill.originalDescription ?? e.bill.description} (${e.status.times}x, desde ${e.status.originLabel})`)
+          .join(', ')} — ${formatCurrency(total)} rolando de mês em mês. Adiar de novo só aumenta a bola de neve: priorize quitar ou renegociar.`,
+        priority: 95,
       });
     }
 
@@ -312,14 +386,13 @@ export function FinancialAdvisor() {
     [pendingItems]
   );
 
-  const criticalPendingTotal = useMemo(() => {
-    if (isPastSelectedMonth) return pendingTotal;
-    if (!isCurrentSelectedMonth) return 0;
-
-    return pendingItems
-      .filter((item) => item.dueDay <= currentDay + 3)
-      .reduce((sum, item) => sum + item.value, 0);
-  }, [pendingItems, pendingTotal, isCurrentSelectedMonth, isPastSelectedMonth, currentDay]);
+  const criticalPendingTotal = useMemo(
+    () =>
+      pendingItems
+        .filter((item) => isCriticalItem(item))
+        .reduce((sum, item) => sum + item.value, 0),
+    [pendingItems]
+  );
 
   const incomeCoveragePercent = useMemo(() => {
     if (pendingTotal <= 0) return 100;
@@ -340,11 +413,7 @@ export function FinancialAdvisor() {
       return steps;
     }
 
-    const criticalItems = isPastSelectedMonth
-      ? pendingItems
-      : isCurrentSelectedMonth
-      ? pendingItems.filter((item) => item.dueDay <= currentDay + 3)
-      : [];
+    const criticalItems = pendingItems.filter((item) => isCriticalItem(item));
 
     if (criticalItems.length > 0) {
       const criticalAmount = criticalItems.reduce((sum, item) => sum + item.value, 0);
