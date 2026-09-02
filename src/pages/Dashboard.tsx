@@ -7,6 +7,7 @@ import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import { useEffect, useState, useMemo } from 'react';
 import { HelpButton } from '../components/HelpModal';
+import { ListSkeleton } from '../components/PageSpinner';
 
 interface UnifiedItem {
   id: string;
@@ -121,6 +122,9 @@ export function Dashboard() {
 
   const progressPercent = totalDue > 0 ? Math.round((totalPaid / totalDue) * 100) : 0;
 
+  // useLiveQuery devolve undefined até a primeira resposta do Dexie.
+  const isLoading = bills === undefined || recurringDebts === undefined;
+
   // Atrasadas primeiro e, entre elas, as que já foram mais empurradas —
   // é a dívida que vem se arrastando que precisa aparecer no topo.
   const upcomingItems = allItems
@@ -223,7 +227,9 @@ export function Dashboard() {
       {/* Quick view of upcoming bills */}
       <div className="card md:col-span-2">
         <h3 className="font-bold mb-3">Próximas contas</h3>
-        {upcomingItems.length > 0 ? (
+        {isLoading ? (
+          <ListSkeleton rows={3} />
+        ) : upcomingItems.length > 0 ? (
           <div className="space-y-2">
             {upcomingItems.map((item) => (
                 <div key={item.id} className="flex justify-between items-center py-2 border-b border-[var(--color-border)] last:border-0">
