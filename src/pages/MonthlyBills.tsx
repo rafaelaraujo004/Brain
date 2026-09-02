@@ -11,52 +11,16 @@ import {
   updateBillStatusWithSync,
   updateRecurringDebtPaidInstallmentsWithSync,
 } from '../db/database';
-import { formatCurrency, getMonthName } from '../utils/formatters';
+import { buildDueDate, formatCurrency, formatDate } from '../utils/formatters';
+import {
+  formatPostponeSummary,
+  formatPostponeTimeline,
+  getPostponeStatus,
+} from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import type { Bill, RecurringDebt } from '../types';
 import { HelpButton } from '../components/HelpModal';
-
-interface CarryOverTrace {
-  totalPostponements: number;
-  months: string[];
-}
-
-function formatMonthYearShort(month: number, year: number): string {
-  return `${getMonthName(month)}/${year}`;
-}
-
-async function buildCarryOverTrace(bill: Bill): Promise<CarryOverTrace | null> {
-  if (!bill.carriedFromBillId || !bill.carriedFromMonth || !bill.carriedFromYear) return null;
-
-  const monthMap = new Map<string, string>();
-  const visitedBillIds = new Set<number>();
-  let cursor: Bill | undefined = bill;
-
-  while (cursor?.carriedFromBillId && cursor.carriedFromMonth && cursor.carriedFromYear) {
-    const monthKey = `${cursor.carriedFromYear}-${cursor.carriedFromMonth}`;
-    if (!monthMap.has(monthKey)) {
-      monthMap.set(monthKey, formatMonthYearShort(cursor.carriedFromMonth, cursor.carriedFromYear));
-    }
-
-    const previousBillId: number = cursor.carriedFromBillId;
-    if (visitedBillIds.has(previousBillId)) break;
-    visitedBillIds.add(previousBillId);
-
-    cursor = await db.bills.get(previousBillId);
-  }
-
-  if (monthMap.size === 0) return null;
-
-  const orderedMonths = [...monthMap.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([, label]) => label);
-
-  return {
-    totalPostponements: orderedMonths.length,
-    months: orderedMonths,
-  };
-}
 
 function getRecurringForMonth(debt: RecurringDebt, month: number, year: number) {
   const monthsSinceStart = (year - debt.startYear) * 12 + (month - debt.startMonth);
@@ -381,23 +345,22 @@ function BillItem({
   onDelete: () => void;
   onEdit: () => void;
 }) {
-  const isCarried = !!(bill.carriedFromMonth && bill.carriedFromYear);
-  const carryTrace = useLiveQuery(
-    () => buildCarryOverTrace(bill),
-    [bill.id, bill.carriedFromBillId, bill.carriedFromMonth, bill.carriedFromYear]
-  );
   const [showActions, setShowActions] = useState(false);
   const longPressTimeoutRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
   const isPaid = bill.status === 'paid';
   const isSkipped = bill.status === 'skipped';
 
-  const today = new Date();
-  const isOverdue =
-    !isPaid &&
-    bill.year === today.getFullYear() &&
-    bill.month === today.getMonth() + 1 &&
-    today.getDate() > bill.dueDay;
+  // Todo o rastreio de adiamento vem do proprio registro — sem percorrer a
+  // cadeia no banco a cada render.
+  const postpone = useMemo(() => getPostponeStatus(bill), [bill]);
+  const isCarried = postpone.isCarried;
+  const isOverdue = postpone.isOverdue;
+  const postponeSummary = formatPostponeSummary(postpone);
+  const timeline = useMemo(
+    () => (showActions ? formatPostponeTimeline(postpone) : []),
+    [showActions, postpone]
+  );
 
   const startLongPress = () => {
     if (longPressTimeoutRef.current) window.clearTimeout(longPressTimeoutRef.current);
@@ -430,9 +393,12 @@ function BillItem({
 
   return (
     <div
-      className={`card flex items-center gap-3 transition-all duration-200 ${
+      className={`card transition-all duration-200 ${
         isPaid || isSkipped ? 'opacity-60' : ''
       } ${selected ? 'ring-2 ring-[var(--color-primary)] bg-blue-500/5' : ''
+      } ${postpone.isLate && !isPaid && !isSkipped
+        ? 'border-l-4 border-l-[var(--color-danger)]'
+        : ''
       }`}
       onPointerDown={startLongPress}
       onPointerUp={clearLongPress}
@@ -440,6 +406,7 @@ function BillItem({
       onPointerCancel={clearLongPress}
       onClick={handleCardClick}
     >
+      <div className="flex items-center gap-3">
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -462,13 +429,18 @@ function BillItem({
         <p className={`text-sm font-medium truncate ${isPaid || isSkipped ? 'line-through' : ''}`}>
           {bill.description}
         </p>
-        <div className="flex items-center gap-2 mt-0.5">
+        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
           <span className="text-xs text-[var(--color-text-secondary)]">
-            Dia {bill.dueDay}
+            Vence {formatDate(postpone.currentDueDate)}
           </span>
-          {isCarried && bill.carriedFromMonth && (
+          {isCarried && (
             <span className="text-xs font-medium text-orange-500">
-              ← {getMonthName(bill.carriedFromMonth)}/{bill.carriedFromYear}
+              ← {postpone.originLabel}
+            </span>
+          )}
+          {postpone.isLate && postpone.overdueLabel && (
+            <span className="text-xs font-semibold text-[var(--color-danger)]">
+              vencida {postpone.overdueLabel}
             </span>
           )}
           {bill.initialValue !== bill.finalValue && (
@@ -480,10 +452,8 @@ function BillItem({
         {bill.observation && (
           <p className="text-xs text-[var(--color-warning)] mt-0.5 truncate">• {bill.observation}</p>
         )}
-        {carryTrace && (
-          <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 truncate">
-            Postergada {carryTrace.totalPostponements}x • Meses: {carryTrace.months.join(', ')}
-          </p>
+        {postponeSummary && (
+          <p className="text-[11px] text-orange-400 mt-0.5 truncate">{postponeSummary}</p>
         )}
       </div>
 
@@ -502,9 +472,11 @@ function BillItem({
             ) : isSkipped ? (
               <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-500">Adiado</span>
             ) : isCarried ? (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-500">Atrasada</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-500">
+                Adiada {postpone.times}x
+              </span>
             ) : isOverdue ? (
-              <span className="badge-overdue">Atrasado</span>
+              <span className="badge-overdue">Vencida</span>
             ) : (
               <span className="badge-pending">Pendente</span>
             )}
@@ -527,19 +499,25 @@ function BillItem({
                   onReturn();
                 }}
                 className="p-2 rounded-lg bg-green-500/15 text-green-500"
-                title="Devolver ao mês original e pagar"
+                title={`Devolver a ${postpone.originLabel} e pagar`}
               >
                 <Undo size={16} />
               </button>
             )}
-            {!isPaid && !isSkipped && !isCarried && (
+            {/* Uma conta ja adiada continua podendo ser adiada: o historico
+                acumula e ela nunca perde a competencia de origem. */}
+            {!isPaid && !isSkipped && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onSkip();
                 }}
                 className="p-2 rounded-lg bg-yellow-500/15 text-yellow-500"
-                title="Postergar para o próximo mês"
+                title={
+                  isCarried
+                    ? `Adiar de novo (já adiada ${postpone.times}x)`
+                    : 'Postergar para o próximo mês'
+                }
               >
                 <ArrowRight size={16} />
               </button>
@@ -556,6 +534,34 @@ function BillItem({
           </div>
         )}
       </div>
+      </div>
+
+      {timeline.length > 0 && (
+        <div
+          className="mt-3 pt-3 border-t border-white/10 space-y-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-[11px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">
+            Histórico de adiamentos
+          </p>
+          {timeline.map((line) => (
+            <p key={line} className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
+              {line}
+            </p>
+          ))}
+          <p className="text-[11px] pt-1 text-[var(--color-text-secondary)]">
+            Vencimento original:{' '}
+            <span className="font-medium text-[var(--color-text)]">
+              {formatDate(postpone.originalDueDate)}
+            </span>
+            {postpone.daysLate > 0 && (
+              <span className="text-[var(--color-danger)] font-medium">
+                {' '}— vencida {postpone.overdueLabel}
+              </span>
+            )}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -740,7 +746,14 @@ function BillForm({
       await db.bills.update(bill.id, { ...data, status: bill.status });
       await updateBillStatusWithSync(bill.id, status);
     } else {
-      await db.bills.add(data);
+      const day = parseInt(dueDay) || 1;
+      await db.bills.add({
+        ...data,
+        originMonth: month,
+        originYear: year,
+        originalDueDate: buildDueDate(month, year, day).toISOString(),
+        postponeHistory: [],
+      });
     }
 
     onClose();

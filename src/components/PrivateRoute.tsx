@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import type { ReactNode } from 'react';
 
 export function PrivateRoute({ children }: { children?: ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, isLocalMode } = useAuth();
 
   if (loading) {
     return (
@@ -14,7 +14,8 @@ export function PrivateRoute({ children }: { children?: ReactNode }) {
     );
   }
 
-  if (!user) {
+  // Sem Firebase configurado o app roda local, sem exigir conta.
+  if (!user && !isLocalMode) {
     return <Navigate to="/login" replace />;
   }
 
