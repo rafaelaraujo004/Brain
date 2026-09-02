@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -44,6 +45,17 @@ export default defineConfig({
       }
     })
   ],
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+    setupFiles: ['src/test/setup.ts'],
+    alias: {
+      'firebase/app': '/src/test/firebase-stub.ts',
+      'firebase/auth': '/src/test/firebase-stub.ts',
+      'firebase/firestore': '/src/test/firebase-stub.ts',
+      'firebase/storage': '/src/test/firebase-stub.ts'
+    }
+  },
   build: {
     rollupOptions: {
       output: {
