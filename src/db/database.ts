@@ -607,7 +607,7 @@ function getPreviousMonthYear(month: number, year: number): { month: number; yea
 
 // Auto carry-over only runs when the previous month has already ended.
 // Otherwise, user must manually click "Postergar".
-export async function ensureCarryOverBillsForMonth(month: number, year: number): Promise<void> {
+export async function ensureCarryOverBillsForMonth(month: number, year: number): Promise<number> {
   const prev = getPreviousMonthYear(month, year);
 
   const today = new Date();
@@ -616,7 +616,7 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
   const prevMonthEnded =
     prev.year < currentYear || (prev.year === currentYear && prev.month < currentMonth);
 
-  if (!prevMonthEnded) return;
+  if (!prevMonthEnded) return 0;
 
   const [previousMonthBills, currentMonthBills] = await Promise.all([
     db.bills
@@ -627,7 +627,7 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
     db.bills.where('[month+year]').equals([month, year]).toArray(),
   ]);
 
-  if (previousMonthBills.length === 0) return;
+  if (previousMonthBills.length === 0) return 0;
 
   const newCarryOvers: Bill[] = [];
 
@@ -639,11 +639,8 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
 
     const baseDescription = prevBill.originalDescription ?? prevBill.description;
     const tracking = buildPostponementFields(prevBill, { month, year }, { auto: true });
-    // O rotulo aponta sempre para a competencia de ORIGEM, nao para a anterior,
-    // para que uma conta empurrada varias vezes nao perca a referencia real.
-    const carryDescription = `${baseDescription} [ATRASADA - ${getMonthName(tracking.originMonth as number)}/${tracking.originYear}]`;
     newCarryOvers.push({
-      description: carryDescription,
+      description: baseDescription,
       originalDescription: baseDescription,
       initialValue: prevBill.finalValue,
       finalValue: prevBill.finalValue,
@@ -662,6 +659,8 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
   if (newCarryOvers.length > 0) {
     await db.bills.bulkAdd(newCarryOvers);
   }
+
+  return newCarryOvers.length;
 }
 
 function getNextMonthYear(month: number, year: number): { month: number; year: number } {
@@ -835,9 +834,8 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
 
   const baseDescription = bill.originalDescription ?? bill.description;
   const tracking = buildPostponementFields(bill, next);
-  const carryDescription = `${baseDescription} [ATRASADA - ${getMonthName(tracking.originMonth as number)}/${tracking.originYear}]`;
   await db.bills.add({
-    description: carryDescription,
+    description: baseDescription,
     originalDescription: baseDescription,
     initialValue: bill.finalValue,
     finalValue: bill.finalValue,
@@ -854,6 +852,29 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
 
   // Mark original as skipped
   await updateBillStatusWithSync(bill.id, 'skipped');
+}
+
+/**
+ * Desfaz um adiamento: apaga a conta criada no mês seguinte e devolve a
+ * original para 'pending'. É o par do skipBillToNextMonth, usado pelo
+ * "Desfazer" do aviso que aparece logo após a ação.
+ */
+export async function undoSkipBill(billId: number): Promise<void> {
+  const bill = await db.bills.get(billId);
+  if (!bill) return;
+
+  await removeCarryOverForPaidBill(billId);
+  if (bill.status === 'skipped') {
+    await updateBillStatusWithSync(billId, 'pending');
+  }
+}
+
+/** Recria uma conta excluída com o mesmo id, para o "Desfazer" da exclusão. */
+export async function restoreBill(bill: Bill): Promise<void> {
+  if (!bill.id) return;
+  await db.bills.put(bill);
+  markLocalChanged();
+  scheduleCloudSync();
 }
 
 export async function skipRecurringToNextMonth(
