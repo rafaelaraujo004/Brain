@@ -66,10 +66,16 @@ describe('contas mensais', () => {
     expect(await billsOf(5, 2026)).toHaveLength(0);
   });
 
-  it('não inventa fatura de mês que ainda não chegou', async () => {
+  it('gera também para meses futuros', async () => {
+    // A fatura de um mês que ainda não chegou é devida quando chegar, e sem
+    // ela o adiamento para frente não teria com o que somar: o débito viajava
+    // sozinho até o mês de destino.
     await createMonthlyBill();
-    // "Hoje" nos testes é a data real; 2099 nunca chegou.
-    expect(await ensureMonthlyBillOccurrences(1, 2099)).toBe(0);
+    expect(await ensureMonthlyBillOccurrences(12, 2026)).toBe(1);
+
+    const dezembro = await billsOf(12, 2026);
+    expect(dezembro).toHaveLength(1);
+    expect(dezembro[0].originMonth).toBe(12);
   });
 
   it('adiar não faz a competência de origem gerar outra fatura', async () => {
@@ -236,5 +242,62 @@ describe('carry-over automático da virada de mês', () => {
     const todas = await db.bills.toArray();
     const emAberto = todas.filter((b) => b.status === 'pending');
     expect(emAberto.reduce((s, b) => s + b.finalValue, 0)).toBe(150);
+  });
+});
+
+describe('adiamento para meses futuros', () => {
+  beforeEach(async () => {
+    await db.bills.clear();
+  });
+
+  it('setembro empurrado até novembro deixa três dívidas em novembro', async () => {
+    // Caso relatado: a conta veio de setembro, foi adiada duas vezes e chegou
+    // em novembro sozinha. Outubro e novembro são meses futuros, e a geração
+    // estava bloqueada para eles — então não havia com o que somar.
+    const setembro = await createMonthlyBill({
+      month: 9,
+      year: 2026,
+      originMonth: 9,
+      originYear: 2026,
+      originalDueDate: new Date(2026, 8, 1).toISOString(),
+      dueDay: 1,
+      finalValue: 500,
+      initialValue: 500,
+      isMonthly: false,
+      description: 'ZCXCXZ',
+    });
+
+    // Setembro → outubro
+    await skipBillToNextMonth(setembro);
+
+    // Ao abrir outubro, a fatura de outubro nasce e convive com a adiada.
+    await ensureMonthlyBillOccurrences(10, 2026);
+    const outubro = (await billsOf(10, 2026)).filter((b) => b.status === 'pending');
+    expect(outubro).toHaveLength(2);
+
+    // Outubro → novembro, empurrando as duas.
+    for (const conta of outubro) await skipBillToNextMonth(conta);
+    await ensureMonthlyBillOccurrences(11, 2026);
+
+    const novembro = (await billsOf(11, 2026)).filter((b) => b.status === 'pending');
+    const linhas = novembro
+      .map((b) => ({
+        veioDe: `${b.originMonth}/${b.originYear}`,
+        vezes: (b.postponeHistory ?? []).length,
+      }))
+      .sort((a, b) => a.veioDe.localeCompare(b.veioDe));
+
+    expect(linhas).toEqual([
+      { veioDe: '10/2026', vezes: 1 },
+      { veioDe: '11/2026', vezes: 0 },
+      { veioDe: '9/2026', vezes: 2 },
+    ]);
+    expect(novembro.reduce((s, b) => s + b.finalValue, 0)).toBe(1500);
+
+    // Setembro e outubro ficam zerados: as dívidas andaram, não se duplicaram.
+    for (const m of [9, 10]) {
+      const abertas = (await billsOf(m, 2026)).filter((b) => b.status === 'pending');
+      expect(abertas).toHaveLength(0);
+    }
   });
 });

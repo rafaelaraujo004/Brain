@@ -733,18 +733,18 @@ function competenceKey(month: number, year: number): string {
  * pelo mês onde ela está hoje — uma fatura de junho adiada para setembro
  * continua sendo a de junho, então junho não gera outra.
  *
+ * Vale também para meses futuros. A energia de outubro é devida em outubro
+ * mesmo que ainda estejamos em setembro, e sem isso adiar uma conta para
+ * frente deixava os meses seguintes sem a fatura deles: o débito viajava
+ * sozinho em vez de somar.
+ *
  * Devolve quantas faturas foram criadas.
  */
 export async function ensureMonthlyBillOccurrences(
   month: number,
   year: number
 ): Promise<number> {
-  const today = new Date();
-  const currentKey = competenceKey(today.getMonth() + 1, today.getFullYear());
   const targetKey = competenceKey(month, year);
-
-  // Não inventa fatura de mês que ainda não chegou.
-  if (targetKey > currentKey) return 0;
 
   const monthlyBills = await db.bills.filter((b) => b.isMonthly === true).toArray();
   if (monthlyBills.length === 0) return 0;

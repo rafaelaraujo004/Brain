@@ -1,6 +1,12 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { TrendingUp, TrendingDown, Wallet, DollarSign, RefreshCw } from 'lucide-react';
-import { db, getOrCreateSettings, ensureCarryOverBillsForMonth, ensureMonthlyConfig } from '../db/database';
+import {
+  db,
+  getOrCreateSettings,
+  ensureCarryOverBillsForMonth,
+  ensureMonthlyBillOccurrences,
+  ensureMonthlyConfig,
+} from '../db/database';
 import { formatCurrency, formatDate } from '../utils/formatters';
 import { getPostponeStatus, getRecurringStatusForMonth } from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
@@ -52,6 +58,9 @@ export function Dashboard() {
 
   useEffect(() => {
     (async () => {
+      // Mesma ordem da tela de Contas, senão os totais das duas divergem:
+      // primeiro as faturas do próprio mês, depois o que ficou para trás.
+      await ensureMonthlyBillOccurrences(month, year);
       await ensureCarryOverBillsForMonth(month, year);
       const settings = await getOrCreateSettings();
       const config = await ensureMonthlyConfig(month, year, settings.defaultSalary);
