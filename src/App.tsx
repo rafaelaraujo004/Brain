@@ -5,6 +5,7 @@ import { PrivateRoute } from './components/PrivateRoute';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './components/Toast';
 import { PageSpinner } from './components/PageSpinner';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Dashboard } from './pages/Dashboard';
 import { LoginPage } from './pages/Login';
 import { useTheme } from './hooks/useTheme';
@@ -34,8 +35,9 @@ export default function App() {
   if (!loaded) return <PageSpinner />;
 
   return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <AuthProvider>
+    <ErrorBoundary>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <AuthProvider>
         <ToastProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
@@ -90,7 +92,8 @@ export default function App() {
             </Route>
           </Routes>
         </ToastProvider>
-      </AuthProvider>
-    </BrowserRouter>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
