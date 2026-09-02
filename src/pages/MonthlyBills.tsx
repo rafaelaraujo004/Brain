@@ -235,7 +235,9 @@ export function MonthlyBills() {
           items={[
             { icon: '✅', title: 'Marcar como paga', description: 'Toque no ícone à esquerda da conta para alternar entre pago e pendente.' },
             { icon: '📋', title: 'Ver ações', description: 'Toque no card da conta para expandir as opções de editar, postergar e excluir.' },
-            { icon: '➡️', title: 'Postergar', description: 'O botão amarelo (→) adia a conta para o próximo mês. Ela fica marcada como "Adiado".' },            { icon: '↩️', title: 'Devolver ao mês original', description: 'Contas atrasadas (postergadas de outro mês) mostram o botão verde (↩) para devolver ao mês de origem e marcar como paga.' },            { icon: '🔄', title: 'Dívidas recorrentes', description: 'Parcelas de dívidas recorrentes aparecem automaticamente com o ícone de setas.' },
+            { icon: '➡️', title: 'Adiar', description: 'Empurra a conta para o mês seguinte. O mês de destino passa a gerar a própria fatura, então a adiada se soma a ela: três meses sem pagar viram três dívidas separadas, cada uma com o vencimento que ficou para trás.' },
+            { icon: '↩️', title: 'Devolver ao mês de origem', description: 'Contas vindas de outro mês mostram o botão verde (↩) para voltar à competência de origem e marcar como paga, limpando os meses do meio.' },
+            { icon: '↻', title: 'Conta mensal', description: 'O ícone de repetição indica que a conta volta todo mês. Liga sozinho no primeiro adiamento; desmarque na edição se a conta for avulsa.' },
             { icon: '➕', title: 'Adicionar conta', description: 'Use o botão + no canto inferior para cadastrar uma nova conta no mês.' },
           ]}
         />

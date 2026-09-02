@@ -155,9 +155,9 @@ export function BillForm({
             className="input-field"
           />
 
-          {/* Repetição mensal. Precisa explicar o efeito no adiamento, porque
-              é aí que a diferença aparece: adiar uma conta mensal não some
-              com a fatura do mês seguinte — as duas passam a ser devidas. */}
+          {/* Repetição mensal. Liga sozinha no primeiro adiamento, então o
+              texto serve mais para explicar o que já está acontecendo e para
+              dar o caminho de volta em conta que era mesmo avulsa. */}
           <button
             type="button"
             onClick={() => setIsMonthly((v) => !v)}
@@ -182,8 +182,8 @@ export function BillForm({
               <span className="block text-sm font-semibold">Repete todo mês</span>
               <span className="block text-[11px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
                 {isMonthly
-                  ? 'Cada mês ganha a própria fatura. Se você adiar uma, ela se soma à do mês seguinte — três meses sem pagar viram três dívidas.'
-                  : 'Conta avulsa: adiar move a mesma dívida para o mês seguinte, sem duplicar.'}
+                  ? 'Cada mês ganha a própria fatura, e a adiada se soma à nova — três meses sem pagar viram três dívidas separadas. Desmarque se esta conta não volta todo mês.'
+                  : 'Conta avulsa: não gera fatura nos meses seguintes. Adiar liga esta opção automaticamente.'}
               </span>
             </span>
           </button>

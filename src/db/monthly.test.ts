@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   db,
+  ensureCarryOverBillsForMonth,
   ensureMonthlyBillOccurrences,
   setBillSeriesMonthly,
   skipBillToNextMonth,
@@ -116,14 +117,13 @@ describe('contas mensais', () => {
     }
   });
 
-  it('conta avulsa continua movendo uma dívida só', async () => {
-    const avulsa = await createMonthlyBill({ isMonthly: false, description: 'Reforma' });
-    await skipBillToNextMonth(avulsa);
-    await ensureMonthlyBillOccurrences(7, 2026);
+  it('conta avulsa que ninguém adiou não gera nada', async () => {
+    // A geração é consequência do adiamento, não do simples cadastro: uma
+    // reforma paga em junho não pode virar uma reforma por mês.
+    await createMonthlyBill({ isMonthly: false, description: 'Reforma' });
 
-    const julho = await billsOf(7, 2026);
-    expect(julho).toHaveLength(1);
-    expect(julho[0].originMonth).toBe(6);
+    expect(await ensureMonthlyBillOccurrences(7, 2026)).toBe(0);
+    expect(await billsOf(7, 2026)).toHaveLength(0);
   });
 
   it('usa a ocorrência mais recente como molde do valor', async () => {
@@ -149,5 +149,92 @@ describe('contas mensais', () => {
     const todas = await db.bills.toArray();
     expect(todas.every((b) => b.isMonthly === false)).toBe(true);
     expect(await ensureMonthlyBillOccurrences(8, 2026)).toBe(0);
+  });
+});
+
+describe('adiar acumula sozinho', () => {
+  beforeEach(async () => {
+    await db.bills.clear();
+  });
+
+  it('adiar uma conta avulsa passa a gerar as faturas seguintes', async () => {
+    // O usuário não precisa lembrar de marcar nada: adiar já significa que a
+    // conta volta no mês que vem.
+    const avulsa = await createMonthlyBill({ isMonthly: false });
+    expect(avulsa.isMonthly).toBe(false);
+
+    await skipBillToNextMonth(avulsa);
+
+    const depois = await db.bills.get(avulsa.id!);
+    expect(depois?.isMonthly).toBe(true);
+    expect(await ensureMonthlyBillOccurrences(7, 2026)).toBe(1);
+  });
+
+  it('tres adiamentos viram tres dividas individuais no destino', async () => {
+    // Cenário do usuário: adiei a mesma conta por três meses e quero ver as
+    // três no mês de destino, cada uma sabendo quando venceu.
+    await createMonthlyBill({ isMonthly: false });
+
+    for (const mes of [6, 7, 8]) {
+      await ensureMonthlyBillOccurrences(mes, 2026);
+      const emAberto = (await billsOf(mes, 2026)).filter((b) => b.status === 'pending');
+      for (const conta of emAberto) await skipBillToNextMonth(conta);
+    }
+    await ensureMonthlyBillOccurrences(9, 2026);
+
+    const setembro = (await billsOf(9, 2026)).filter((b) => b.status === 'pending');
+
+    const adiadas = setembro
+      .filter((b) => (b.postponeHistory ?? []).length > 0)
+      .map((b) => ({
+        venceu: `${b.originMonth}/${b.originYear}`,
+        vezes: (b.postponeHistory ?? []).length,
+      }))
+      .sort((a, b) => a.venceu.localeCompare(b.venceu));
+
+    expect(adiadas).toEqual([
+      { venceu: '6/2026', vezes: 3 },
+      { venceu: '7/2026', vezes: 2 },
+      { venceu: '8/2026', vezes: 1 },
+    ]);
+  });
+
+  it('desmarcar depois interrompe a geração', async () => {
+    // Escape para quem adiou uma conta que era mesmo avulsa.
+    const avulsa = await createMonthlyBill({ isMonthly: false });
+    await skipBillToNextMonth(avulsa);
+    await setBillSeriesMonthly(avulsa.seriesId ?? avulsa.id!, false);
+
+    expect(await ensureMonthlyBillOccurrences(7, 2026)).toBe(0);
+  });
+});
+
+describe('carry-over automático da virada de mês', () => {
+  beforeEach(async () => {
+    await db.bills.clear();
+  });
+
+  it('tira a dívida do mês de origem em vez de contar nos dois', async () => {
+    // Antes a original ficava pendente e uma cópia ia para o mês seguinte, o
+    // que fazia a mesma dívida ser somada duas vezes.
+    const junho = await createMonthlyBill({ isMonthly: false });
+
+    const trazidas = await ensureCarryOverBillsForMonth(7, 2026);
+    expect(trazidas).toBe(1);
+
+    const emJunho = await billsOf(6, 2026);
+    expect(emJunho).toHaveLength(1);
+    expect(emJunho[0].status).toBe('skipped');
+    expect(emJunho[0].id).toBe(junho.id);
+
+    const emJulho = await billsOf(7, 2026);
+    expect(emJulho).toHaveLength(1);
+    expect(emJulho[0].status).toBe('pending');
+    expect(emJulho[0].originMonth).toBe(6);
+
+    // Somando os dois meses, a dívida aparece uma vez só.
+    const todas = await db.bills.toArray();
+    const emAberto = todas.filter((b) => b.status === 'pending');
+    expect(emAberto.reduce((s, b) => s + b.finalValue, 0)).toBe(150);
   });
 });

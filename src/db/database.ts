@@ -697,8 +697,20 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
     });
   }
 
-  if (newCarryOvers.length > 0) {
-    await db.bills.bulkAdd(newCarryOvers);
+  if (newCarryOvers.length === 0) return 0;
+
+  await db.bills.bulkAdd(newCarryOvers);
+
+  // A original precisa sair do mês de origem. Sem isto a mesma dívida ficava
+  // pendente nos dois lugares: junho continuava devendo R$ 150 mesmo depois de
+  // a conta ter sido empurrada para julho, e a soma dos meses contava em
+  // dobro.
+  const movedIds = newCarryOvers
+    .map((b) => b.carriedFromBillId)
+    .filter((id): id is number => typeof id === 'number');
+
+  if (movedIds.length > 0) {
+    await db.bills.bulkUpdate(movedIds.map((key) => ({ key, changes: { status: 'skipped' } })));
   }
 
   return newCarryOvers.length;
@@ -1022,6 +1034,17 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
 
   // Mark original as skipped
   await updateBillStatusWithSync(bill.id, 'skipped');
+
+  // Adiar é assumir que esta conta volta no mês seguinte: a competência de
+  // destino passa a gerar a própria fatura, e a adiada se soma a ela em vez de
+  // ocupar o lugar dela. É isso que faz três adiamentos virarem três dívidas
+  // individuais, cada uma com o vencimento que ficou para trás.
+  //
+  // Se a conta for mesmo avulsa, basta desmarcar "repete todo mês" na edição
+  // que ela para de gerar novas.
+  if (!bill.isMonthly) {
+    await setBillSeriesMonthly(bill.seriesId ?? bill.id, true);
+  }
 }
 
 /**
