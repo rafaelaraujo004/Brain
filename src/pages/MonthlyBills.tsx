@@ -16,6 +16,7 @@ import {
   formatPostponeSummary,
   formatPostponeTimeline,
   getPostponeStatus,
+  getRecurringStatusForMonth,
 } from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
@@ -23,16 +24,14 @@ import type { Bill, RecurringDebt } from '../types';
 import { HelpButton } from '../components/HelpModal';
 
 function getRecurringForMonth(debt: RecurringDebt, month: number, year: number) {
-  const monthsSinceStart = (year - debt.startYear) * 12 + (month - debt.startMonth);
-  const installmentNumber = monthsSinceStart + 1;
-  if (installmentNumber < 1 || installmentNumber > debt.totalInstallments) return null;
+  const recurring = getRecurringStatusForMonth(debt, month, year);
+  if (!recurring.applies) return null;
 
-  const isPaid = debt.paidInstallments >= installmentNumber;
-  const today = new Date();
-  const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === month;
-  const isOverdue = !isPaid && isCurrentMonth && today.getDate() > debt.dueDay;
-
-  return { installmentNumber, isPaid, isOverdue };
+  return {
+    installmentNumber: recurring.installmentNumber,
+    isPaid: recurring.status === 'paid',
+    isOverdue: recurring.status === 'overdue',
+  };
 }
 
 export function MonthlyBills() {

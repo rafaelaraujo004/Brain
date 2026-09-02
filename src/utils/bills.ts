@@ -1,4 +1,4 @@
-import type { Bill, PostponeRecord } from '../types';
+import type { Bill, PostponeRecord, RecurringDebt } from '../types';
 import {
   buildDueDate,
   daysOverdue,
@@ -112,6 +112,55 @@ export function formatPostponeSummary(status: PostponeStatus): string {
     parts.push(`última em ${formatDate(status.lastPostponedAt)}`);
   }
   return parts.join(' • ');
+}
+
+/**
+ * Situação de uma parcela recorrente numa competência. Antes cada tela
+ * recalculava isso na mão e todas repetiam o mesmo erro: só consideravam
+ * atraso quando a competência era o mês corrente, então parcelas vencidas
+ * em meses anteriores apareciam para sempre como "pendente".
+ */
+export interface RecurringStatus {
+  applies: boolean;
+  installmentNumber: number;
+  status: 'paid' | 'pending' | 'overdue';
+  dueDate: Date;
+  daysLate: number;
+  overdueLabel: string;
+}
+
+export function getRecurringStatusForMonth(
+  debt: RecurringDebt,
+  month: number,
+  year: number,
+  today: Date = startOfToday()
+): RecurringStatus {
+  const monthsSinceStart = (year - debt.startYear) * 12 + (month - debt.startMonth);
+  const installmentNumber = monthsSinceStart + 1;
+  const dueDate = buildDueDate(month, year, debt.dueDay);
+
+  if (installmentNumber < 1 || installmentNumber > debt.totalInstallments) {
+    return {
+      applies: false,
+      installmentNumber: 0,
+      status: 'pending',
+      dueDate,
+      daysLate: 0,
+      overdueLabel: '',
+    };
+  }
+
+  const isPaid = debt.paidInstallments >= installmentNumber;
+  const daysLate = isPaid ? 0 : daysOverdue(dueDate, today);
+
+  return {
+    applies: true,
+    installmentNumber,
+    status: isPaid ? 'paid' : daysLate > 0 ? 'overdue' : 'pending',
+    dueDate,
+    daysLate,
+    overdueLabel: formatOverdueSpan(daysLate),
+  };
 }
 
 /** Trilha detalhada, uma linha por adiamento, para o painel expandido. */
