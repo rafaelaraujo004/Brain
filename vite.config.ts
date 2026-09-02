@@ -37,8 +37,25 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}']
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        // O bundle do Firebase sozinho passa de 400 kB e estourava o limite
+        // padrão de 2 MB por arquivo do precache.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024
       }
     })
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // Separa as dependências que quase nunca mudam das que mudam a cada
+        // deploy: assim uma correção no app não invalida o cache do Firebase
+        // nem do React no navegador de quem já tem o PWA instalado.
+        manualChunks: {
+          firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/storage'],
+          react: ['react', 'react-dom', 'react-router-dom'],
+          db: ['dexie', 'dexie-react-hooks']
+        }
+      }
+    }
+  }
 })

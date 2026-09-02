@@ -8,10 +8,12 @@ import {
   skipBillToNextMonth,
   skipRecurringToNextMonth,
   returnBillToOriginalMonth,
+  restoreBill,
+  undoSkipBill,
   updateBillStatusWithSync,
   updateRecurringDebtPaidInstallmentsWithSync,
 } from '../db/database';
-import { buildDueDate, formatCurrency, formatDate } from '../utils/formatters';
+import { buildDueDate, formatCurrency, formatDate, getMonthName } from '../utils/formatters';
 import {
   formatPostponeSummary,
   formatPostponeTimeline,
@@ -22,6 +24,9 @@ import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import type { Bill, RecurringDebt } from '../types';
 import { HelpButton } from '../components/HelpModal';
+import { useToast } from '../components/Toast';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ListSkeleton } from '../components/PageSpinner';
 
 function getRecurringForMonth(debt: RecurringDebt, month: number, year: number) {
   const recurring = getRecurringStatusForMonth(debt, month, year);
@@ -40,6 +45,8 @@ export function MonthlyBills() {
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [billPendingDeletion, setBillPendingDeletion] = useState<Bill | null>(null);
+  const { showToast } = useToast();
 
   const bills = useLiveQuery(
     () => db.bills.where({ month, year }).sortBy('dueDay'),
@@ -52,8 +59,17 @@ export function MonthlyBills() {
   );
 
   useEffect(() => {
-    void ensureCarryOverBillsForMonth(month, year);
-  }, [month, year]);
+    // O carry-over automático movia contas em silêncio na virada do mês; o
+    // usuário via a lista mudar sem entender de onde vieram os itens.
+    void ensureCarryOverBillsForMonth(month, year).then((carried) => {
+      if (carried > 0) {
+        showToast({
+          message: `${carried} conta${carried > 1 ? 's atrasadas foram trazidas' : ' atrasada foi trazida'} do mês anterior.`,
+          tone: 'info',
+        });
+      }
+    });
+  }, [month, year, showToast]);
 
   useEffect(() => {
     setSelectedIds([]);
@@ -130,22 +146,45 @@ export function MonthlyBills() {
     }
   };
 
-  const deleteBill = async (id: number) => {
-    await db.bills.delete(id);
+  const confirmDeleteBill = async () => {
+    const bill = billPendingDeletion;
+    setBillPendingDeletion(null);
+    if (!bill?.id) return;
+
+    await db.bills.delete(bill.id);
+    showToast({
+      message: `"${bill.originalDescription ?? bill.description}" foi excluída.`,
+      tone: 'warning',
+      actionLabel: 'Desfazer',
+      onAction: () => restoreBill(bill),
+    });
   };
 
   const skipBill = async (bill: Bill) => {
+    if (!bill.id) return;
+    const next = month === 12 ? { month: 1, year: year + 1 } : { month: month + 1, year };
     await skipBillToNextMonth(bill);
+    showToast({
+      message: `Adiada para ${getMonthName(next.month)}/${next.year}.`,
+      actionLabel: 'Desfazer',
+      onAction: () => undoSkipBill(bill.id as number),
+    });
   };
 
   const returnBill = async (bill: Bill) => {
+    const postpone = getPostponeStatus(bill);
     await returnBillToOriginalMonth(bill);
+    showToast({
+      message: `Devolvida para ${postpone.originLabel} e marcada como paga.`,
+    });
   };
 
   const skipRecurring = async (debt: RecurringDebt, installmentNumber: number) => {
     await skipRecurringToNextMonth(debt, installmentNumber, month, year);
   };
 
+  // useLiveQuery devolve undefined até a primeira resposta do Dexie.
+  const isLoading = bills === undefined || recurringDebts === undefined;
   const isSelectionMode = selectedIds.length > 0;
 
   const toggleSelected = (id: string) => {
@@ -263,7 +302,7 @@ export function MonthlyBills() {
             onToggle={() => toggleStatus(bill)}
             onSkip={() => skipBill(bill)}
             onReturn={() => returnBill(bill)}
-            onDelete={() => deleteBill(bill.id!)}
+            onDelete={() => setBillPendingDeletion(bill)}
             onEdit={() => {
               setEditingBill(bill);
               setShowForm(true);
@@ -285,7 +324,12 @@ export function MonthlyBills() {
             onSkip={() => skipRecurring(r.debt, r.installmentNumber)}
           />
         ))}
-        {(filteredBills.length === 0 && filteredRecurringForMonth.length === 0) && (
+        {isLoading && (
+          <div className="md:col-span-2">
+            <ListSkeleton />
+          </div>
+        )}
+        {!isLoading && filteredBills.length === 0 && filteredRecurringForMonth.length === 0 && (
           <p className="text-center text-[var(--color-text-secondary)] py-8 md:col-span-2">
             {normalizedSearch
               ? `Nenhuma conta encontrada para "${searchTerm}"`
@@ -293,6 +337,18 @@ export function MonthlyBills() {
           </p>
         )}
       </div>
+
+      <ConfirmDialog
+        open={billPendingDeletion !== null}
+        title="Excluir conta?"
+        message={
+          billPendingDeletion
+            ? `"${billPendingDeletion.originalDescription ?? billPendingDeletion.description}" será removida deste mês. Você poderá desfazer logo em seguida.`
+            : ''
+        }
+        onConfirm={confirmDeleteBill}
+        onCancel={() => setBillPendingDeletion(null)}
+      />
 
       {/* Add button */}
       <button
@@ -426,7 +482,7 @@ function BillItem({
 
       <div className="flex-1 min-w-0">
         <p className={`text-sm font-medium truncate ${isPaid || isSkipped ? 'line-through' : ''}`}>
-          {bill.description}
+          {bill.originalDescription ?? bill.description}
         </p>
         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
           <span className="text-xs text-[var(--color-text-secondary)]">
