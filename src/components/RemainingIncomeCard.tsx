@@ -101,7 +101,7 @@ export function RemainingIncomeCard({ totalIncome, totalPaid, totalDue, month, y
 
       <div className="grid grid-cols-3 gap-2 mt-3">
         <Legend color="var(--color-success)" label="Já pago" value={totalPaid} />
-        <Legend color="var(--color-warning)" label="Comprometido" value={committed} />
+        <Legend color="var(--color-warning)" label="A pagar" value={committed} />
         <Legend
           color={isShort ? 'var(--color-danger)' : 'var(--color-primary)'}
           label={isShort ? 'Falta' : 'Livre'}
@@ -164,7 +164,7 @@ function Legend({
     <div className="min-w-0">
       <div className="flex items-center gap-1.5">
         <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)] truncate">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">
           {label}
         </span>
       </div>

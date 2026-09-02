@@ -223,9 +223,14 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Configurações</h1>
+    <div className="space-y-4 pb-4">
+      <header className="flex items-center justify-between gap-2 pt-1">
+        <div>
+          <h1 className="text-xl font-extrabold tracking-tight">Configurações</h1>
+          <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
+            Renda, aparência, backup e conta
+          </p>
+        </div>
         <HelpButton
           title="Como usar as Configurações"
           items={[
@@ -237,12 +242,12 @@ export function SettingsPage() {
             { icon: '💾', title: 'Backup', description: 'Exporte seus dados como arquivo JSON para guardar ou restaure um backup anterior.' },
           ]}
         />
-      </div>
+      </header>
 
       <div className="card">
         <div className="flex items-center justify-between gap-3 mb-3">
-          <h3 className="font-semibold">Conta</h3>
-          <span className={`text-xs px-2.5 py-1 rounded-full ${user ? 'bg-green-500/15 text-green-500' : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]'}`}>
+          <h3 className="font-bold tracking-tight">Conta</h3>
+          <span className={user ? 'badge-paid' : 'badge-pending'}>
             {user ? 'Conectado' : 'Desconectado'}
           </span>
         </div>
@@ -381,30 +386,37 @@ export function SettingsPage() {
 
       <div className="md:grid md:grid-cols-2 md:gap-6 space-y-6 md:space-y-0">
 
-      {/* Theme */}
+      {/* Aparência */}
       <div className="card">
-        <h3 className="font-semibold mb-3">Aparência</h3>
-        <div className="flex gap-3">
+        <h3 className="font-bold tracking-tight mb-3">Aparência</h3>
+        {/* Segmentado com indicador que desliza: mostra que os dois modos são
+            faces do mesmo controle, em vez de dois botões independentes. */}
+        <div
+          className="relative flex p-1 rounded-2xl"
+          style={{ background: 'var(--color-surface-2)' }}
+        >
+          <span
+            className="absolute top-1 bottom-1 w-[calc(50%-0.25rem)] rounded-xl transition-transform duration-300"
+            style={{
+              background: 'linear-gradient(135deg, var(--color-primary), var(--color-accent))',
+              boxShadow: 'var(--shadow-primary)',
+              transform: theme === 'dark' ? 'translateX(100%)' : 'translateX(0)',
+            }}
+          />
           <button
             onClick={() => setTheme('light')}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl transition-all ${
-              theme === 'light'
-                ? 'bg-[var(--color-primary)] text-white'
-                : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]'
-            }`}
+            className="relative flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors duration-200"
+            style={{ color: theme === 'light' ? '#fff' : 'var(--color-text-secondary)' }}
           >
-            <Sun size={18} />
+            <Sun size={16} />
             Claro
           </button>
           <button
             onClick={() => setTheme('dark')}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl transition-all ${
-              theme === 'dark'
-                ? 'bg-[var(--color-primary)] text-white'
-                : 'bg-[var(--color-surface-2)] text-[var(--color-text-secondary)]'
-            }`}
+            className="relative flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors duration-200"
+            style={{ color: theme === 'dark' ? '#fff' : 'var(--color-text-secondary)' }}
           >
-            <Moon size={18} />
+            <Moon size={16} />
             Escuro
           </button>
         </div>
@@ -414,7 +426,7 @@ export function SettingsPage() {
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
           <DollarSign size={18} className="text-[var(--color-primary)]" />
-          <h3 className="font-semibold">Salário Padrão</h3>
+          <h3 className="font-bold tracking-tight">Salário Padrão</h3>
         </div>
         <p className="text-xs text-[var(--color-text-secondary)] mb-3">
           Usado como base para novos meses
@@ -438,7 +450,7 @@ export function SettingsPage() {
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
           <DollarSign size={18} className="text-[var(--color-success)]" />
-          <h3 className="font-semibold">Rendas Mensais</h3>
+          <h3 className="font-bold tracking-tight">Rendas Mensais</h3>
         </div>
         <p className="text-xs text-[var(--color-text-secondary)] mb-3">
           Somam com o salário em todos os meses e em todas as abas
@@ -499,7 +511,7 @@ export function SettingsPage() {
 
         <div className="flex items-center gap-2 mb-3">
           <DollarSign size={18} className="text-[var(--color-success)]" />
-          <h3 className="font-semibold">Salário de {getMonthName(month)}</h3>
+          <h3 className="font-bold tracking-tight">Salário de {getMonthName(month)}</h3>
         </div>
         <div className="flex gap-2 mb-4">
           <input
@@ -526,7 +538,7 @@ export function SettingsPage() {
         {/* Extra Funds */}
         <div className="flex items-center gap-2 mb-3">
           <PiggyBank size={18} className="text-[var(--color-warning)]" />
-          <h3 className="font-semibold">Fundos Extras</h3>
+          <h3 className="font-bold tracking-tight">Fundos Extras</h3>
         </div>
 
         <div className="space-y-2 mb-3">
@@ -583,7 +595,7 @@ export function SettingsPage() {
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
           <Database size={18} className="text-[var(--color-primary)]" />
-          <h3 className="font-semibold">Backup dos Dados</h3>
+          <h3 className="font-bold tracking-tight">Backup dos Dados</h3>
         </div>
         <p className="text-xs text-[var(--color-text-secondary)] mb-4">
           Exporte seus dados para um arquivo JSON ou restaure um backup anterior.
@@ -652,7 +664,7 @@ export function SettingsPage() {
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
           <Smartphone size={18} className="text-[var(--color-primary)]" />
-          <h3 className="font-semibold">Instalar App</h3>
+          <h3 className="font-bold tracking-tight">Instalar App</h3>
         </div>
         {isInstalled ? (
           <div className="flex items-center gap-2 text-[var(--color-success)]">

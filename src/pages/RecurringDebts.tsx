@@ -55,9 +55,14 @@ export function RecurringDebts() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Dívidas Recorrentes</h1>
+    <div className="space-y-4 pb-4">
+      <header className="flex items-center justify-between gap-2 pt-1">
+        <div>
+          <h1 className="text-xl font-extrabold tracking-tight">Dívidas parceladas</h1>
+          <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">
+            Financiamentos, empréstimos e compras a prazo
+          </p>
+        </div>
         <HelpButton
           title="Como usar Dívidas Recorrentes"
           items={[
@@ -68,35 +73,31 @@ export function RecurringDebts() {
             { icon: '✅', title: 'Concluídas', description: 'Dívidas com todas as parcelas pagas aparecem na seção "Concluídas" abaixo.' },
           ]}
         />
-      </div>
+      </header>
 
-      <div className="card py-3">
-        <div className="flex items-center gap-2">
-          <Search size={16} className="text-[var(--color-text-secondary)]" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Pesquisar dívida por nome ou observação"
-            className="w-full bg-transparent outline-none text-sm"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="text-xs text-[var(--color-primary)] font-semibold"
-            >
-              Limpar
-            </button>
-          )}
-        </div>
+      <div className="card !py-2.5 !px-4 flex items-center gap-2.5">
+        <Search size={16} className="text-[var(--color-text-tertiary)] flex-shrink-0" />
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Pesquisar dívida por nome ou observação"
+          className="w-full bg-transparent outline-none text-sm placeholder:text-[var(--color-text-tertiary)]"
+        />
+        {searchTerm && (
+          <button
+            onClick={() => setSearchTerm('')}
+            className="text-xs text-[var(--color-primary)] font-bold flex-shrink-0"
+          >
+            Limpar
+          </button>
+        )}
       </div>
 
       {activeDebts.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">
-            Ativas ({activeDebts.length})
-          </h2>
-          <div className="space-y-3 md:grid md:grid-cols-2 md:gap-4 md:space-y-0">
+        <section className="space-y-2.5">
+          <SectionTitle label="Ativas" count={activeDebts.length} tone="var(--color-primary)" />
+          <div className="grid gap-2.5 md:grid-cols-2 stagger">
           {activeDebts.map((debt) => (
             <DebtCard
               key={debt.id}
@@ -111,15 +112,17 @@ export function RecurringDebts() {
             />
           ))}
           </div>
-        </div>
+        </section>
       )}
 
       {completedDebts.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">
-            Finalizadas ({completedDebts.length})
-          </h2>
-          <div className="space-y-3 md:grid md:grid-cols-2 md:gap-4 md:space-y-0">
+        <section className="space-y-2.5">
+          <SectionTitle
+            label="Finalizadas"
+            count={completedDebts.length}
+            tone="var(--color-success)"
+          />
+          <div className="grid gap-2.5 md:grid-cols-2 stagger">
           {completedDebts.map((debt) => (
             <DebtCard
               key={debt.id}
@@ -134,16 +137,23 @@ export function RecurringDebts() {
             />
           ))}
           </div>
-        </div>
+        </section>
       )}
 
       {debts === undefined && <ListSkeleton />}
 
       {debts?.length === 0 && (
-        <div className="text-center py-12 text-[var(--color-text-secondary)]">
-          <CircleDollarSign size={48} className="mx-auto mb-3 opacity-30" />
-          <p>Nenhuma dívida recorrente cadastrada</p>
-          <p className="text-sm mt-1">Toque no + para adicionar</p>
+        <div className="text-center py-14">
+          <div
+            className="w-16 h-16 rounded-3xl mx-auto mb-4 flex items-center justify-center"
+            style={{ background: 'var(--color-primary-soft)', color: 'var(--color-primary)' }}
+          >
+            <CircleDollarSign size={28} />
+          </div>
+          <p className="font-semibold">Nenhuma dívida parcelada</p>
+          <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
+            Toque no + para cadastrar a primeira
+          </p>
         </div>
       )}
 
@@ -160,9 +170,14 @@ export function RecurringDebts() {
           setEditingDebt(null);
           setShowForm(true);
         }}
-        className="fixed bottom-20 md:bottom-8 right-4 md:right-8 w-14 h-14 bg-[var(--color-primary)] text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 hover:bg-[var(--color-primary-dark)] transition-all z-40"
+        aria-label="Nova dívida"
+        className="fixed bottom-24 md:bottom-8 right-4 md:right-8 w-14 h-14 text-white rounded-2xl flex items-center justify-center active:scale-90 transition-transform duration-150 z-40"
+        style={{
+          background: 'linear-gradient(135deg, var(--color-primary), var(--color-accent))',
+          boxShadow: 'var(--shadow-primary)',
+        }}
       >
-        <Plus size={28} />
+        <Plus size={26} strokeWidth={2.5} />
       </button>
 
       {showForm && (
@@ -178,3 +193,14 @@ export function RecurringDebts() {
   );
 }
 
+
+/** Título de seção com contagem, usado para separar ativas de finalizadas. */
+function SectionTitle({ label, count, tone }: { label: string; count: number; tone: string }) {
+  return (
+    <div className="flex items-center gap-2 px-1">
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: tone }} />
+      <h2 className="label-caps !text-[var(--color-text-secondary)]">{label}</h2>
+      <span className="text-[11px] font-bold tnum text-[var(--color-text-tertiary)]">{count}</span>
+    </div>
+  );
+}

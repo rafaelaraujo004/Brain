@@ -589,11 +589,24 @@ export function FinancialAdvisor() {
   }, []);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Brain size={24} className="text-[var(--color-primary)]" />
-          <h1 className="text-xl font-bold">Assistente Financeiro</h1>
+    <div className="space-y-4 pb-4">
+      <header className="flex items-center justify-between gap-2 pt-1">
+        <div className="flex items-center gap-2.5">
+          <span
+            className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 text-white"
+            style={{
+              background: 'linear-gradient(135deg, var(--color-primary), var(--color-accent))',
+              boxShadow: 'var(--shadow-primary)',
+            }}
+          >
+            <Brain size={19} />
+          </span>
+          <div>
+            <h1 className="text-xl font-extrabold tracking-tight">Assistente</h1>
+            <p className="text-xs text-[var(--color-text-tertiary)]">
+              O que fazer com o dinheiro deste mês
+            </p>
+          </div>
         </div>
         <HelpButton
           title="Como usar o Assistente"
@@ -605,97 +618,113 @@ export function FinancialAdvisor() {
             { icon: '🔄', title: 'Auto vs Manual', description: 'No modo Auto, as contas mais prioritárias são selecionadas. No Manual, você escolhe.' },
           ]}
         />
+      </header>
+
+      <div className="flex justify-center">
+        <MonthSelector month={month} year={year} onPrev={goToPrev} onNext={goToNext} />
       </div>
 
-      <MonthSelector month={month} year={year} onPrev={goToPrev} onNext={goToNext} />
-
-      <div className="grid grid-cols-3 gap-3">
-        <div className="card py-3">
-          <p className="text-xs text-[var(--color-text-secondary)]">Falta quitar</p>
-          <p className={`text-sm font-bold ${pendingTotal > 0 ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}>
-            {formatCurrency(pendingTotal)}
-          </p>
-        </div>
-        <div className="card py-3">
-          <p className="text-xs text-[var(--color-text-secondary)]">Valor crítico</p>
-          <p className={`text-sm font-bold ${criticalPendingTotal > 0 ? 'text-orange-500' : 'text-[var(--color-success)]'}`}>
-            {formatCurrency(criticalPendingTotal)}
-          </p>
-        </div>
-        <div className="card py-3">
-          <p className="text-xs text-[var(--color-text-secondary)]">Cobertura</p>
-          <p className={`text-sm font-bold ${incomeCoveragePercent >= 100 ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}`}>
-            {incomeCoveragePercent}%
-          </p>
-        </div>
+      <div className="grid grid-cols-3 gap-3 stagger">
+        <AdvisorStat
+          label="Falta quitar"
+          value={formatCurrency(pendingTotal)}
+          tone={pendingTotal > 0 ? 'var(--color-danger)' : 'var(--color-success)'}
+        />
+        <AdvisorStat
+          label="Vence em 3 dias"
+          value={formatCurrency(criticalPendingTotal)}
+          tone={criticalPendingTotal > 0 ? 'var(--color-warning)' : 'var(--color-success)'}
+        />
+        <AdvisorStat
+          label="Cobertura"
+          value={`${incomeCoveragePercent}%`}
+          tone={
+            incomeCoveragePercent >= 100 ? 'var(--color-success)' : 'var(--color-danger)'
+          }
+        />
       </div>
 
-      <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">
-          Plano de ação — 3 passos
-        </h2>
-        {actionPlan.map((step, index) => (
-          <div
-            key={step.title}
-            className={`card border-l-4 ${
-              step.type === 'alert' ? 'border-l-red-500' : step.type === 'warning' ? 'border-l-orange-500' : 'border-l-blue-500'
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${
-                step.type === 'alert' ? 'bg-red-500/15 text-red-500' : step.type === 'warning' ? 'bg-orange-500/15 text-orange-500' : 'bg-blue-500/15 text-blue-500'
-              }`}>
-                {index + 1}
+      <section className="space-y-2.5">
+        <SectionHeading label="Plano de ação" hint={`${actionPlan.length} passos`} />
+        <div className="space-y-2.5 stagger">
+          {actionPlan.map((step, index) => {
+            const tone = TONE_BY_TYPE[step.type];
+            return (
+              <div
+                key={step.title}
+                className="card !pl-3.5"
+                style={{ borderLeft: `3px solid ${tone}` }}
+              >
+                <div className="flex items-start gap-3">
+                  <div
+                    className="w-7 h-7 rounded-xl flex items-center justify-center text-xs font-extrabold flex-shrink-0 tnum"
+                    style={{ background: `color-mix(in srgb, ${tone} 16%, transparent)`, color: tone }}
+                  >
+                    {index + 1}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold">{step.title}</p>
+                    <p className="text-xs text-[var(--color-text-secondary)] mt-1 leading-relaxed">
+                      {step.detail}
+                    </p>
+                    <p
+                      className="text-[11px] mt-2 inline-block px-2 py-0.5 rounded-full font-semibold"
+                      style={{ background: 'var(--color-surface-2)', color: 'var(--color-text-tertiary)' }}
+                    >
+                      {step.impact}
+                    </p>
+                  </div>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-semibold">{step.title}</p>
-                <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">{step.detail}</p>
-                <p className="text-[11px] mt-1 text-[var(--color-text-secondary)]">Impacto: {step.impact}</p>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      </section>
 
-      {/* Smart Suggestions */}
-      <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">
-          Sugestões do mês — {getMonthName(month)}
-        </h2>
+      {/* Sugestões */}
+      <section className="space-y-2.5">
+        <SectionHeading label={`Sugestões de ${getMonthName(month)}`} />
 
         {suggestions.length === 0 ? (
-          <div className="card text-center py-6">
-            <CheckCircle2 size={32} className="mx-auto text-[var(--color-success)] mb-2" />
-            <p className="text-sm text-[var(--color-text-secondary)]">Tudo em dia! Nenhum alerta no momento.</p>
+          <div className="card text-center py-8">
+            <div
+              className="w-14 h-14 rounded-2xl mx-auto mb-3 flex items-center justify-center"
+              style={{ background: 'var(--color-success-soft)', color: 'var(--color-success)' }}
+            >
+              <CheckCircle2 size={26} />
+            </div>
+            <p className="text-sm font-semibold">Tudo em dia</p>
+            <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
+              Nenhum alerta para este mês
+            </p>
           </div>
         ) : (
-          visibleSuggestions.map((s, i) => (
-            <div
-              key={i}
-              className={`card flex gap-3 items-start border-l-4 ${
-                s.type === 'alert'
-                  ? 'border-l-red-500'
-                  : s.type === 'warning'
-                  ? 'border-l-orange-500'
-                  : 'border-l-blue-500'
-              }`}
-            >
-              <s.icon
-                size={20}
-                className={`flex-shrink-0 mt-0.5 ${
-                  s.type === 'alert'
-                    ? 'text-red-500'
-                    : s.type === 'warning'
-                    ? 'text-orange-500'
-                    : 'text-blue-500'
-                }`}
-              />
-              <div>
-                <p className="text-sm font-semibold">{s.title}</p>
-                <p className="text-xs text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">{s.message}</p>
-              </div>
-            </div>
-          ))
+          <div className="space-y-2.5 stagger">
+            {visibleSuggestions.map((s, i) => {
+              const tone = TONE_BY_TYPE[s.type];
+              return (
+                <div key={i} className="card !pl-3.5" style={{ borderLeft: `3px solid ${tone}` }}>
+                  <div className="flex gap-3 items-start">
+                    <span
+                      className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
+                      style={{
+                        background: `color-mix(in srgb, ${tone} 16%, transparent)`,
+                        color: tone,
+                      }}
+                    >
+                      <s.icon size={16} />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold">{s.title}</p>
+                      <p className="text-xs text-[var(--color-text-secondary)] mt-1 leading-relaxed">
+                        {s.message}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
 
         {suggestions.length > 3 && (
@@ -706,19 +735,28 @@ export function FinancialAdvisor() {
             {showAllSuggestions ? 'Ver menos sugestões' : `Ver mais ${suggestions.length - 3} sugest${suggestions.length - 3 > 1 ? 'ões' : 'ão'}`}
           </button>
         )}
-      </div>
+      </section>
 
       {/* Priority Editor */}
       <div className="space-y-2">
         <button
           onClick={() => setShowPriorities(!showPriorities)}
-          className="flex items-center justify-between w-full card py-3"
+          className="card card-interactive flex items-center justify-between w-full !py-3"
         >
-          <div className="flex items-center gap-2">
-            <Settings2 size={20} className="text-[var(--color-primary)]" />
-            <span className="text-sm font-semibold">Gerenciar Prioridades</span>
+          <div className="flex items-center gap-2.5">
+            <span
+              className="w-8 h-8 rounded-xl flex items-center justify-center"
+              style={{ background: 'var(--color-primary-soft)', color: 'var(--color-primary)' }}
+            >
+              <Settings2 size={16} />
+            </span>
+            <span className="text-sm font-bold">Gerenciar prioridades</span>
           </div>
-          {showPriorities ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+          {showPriorities ? (
+            <ChevronUp size={18} className="text-[var(--color-text-tertiary)]" />
+          ) : (
+            <ChevronDown size={18} className="text-[var(--color-text-tertiary)]" />
+          )}
         </button>
 
         {showPriorities && (
@@ -920,6 +958,33 @@ export function FinancialAdvisor() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Cor de cada tipo de recado do assistente. */
+const TONE_BY_TYPE: Record<'alert' | 'warning' | 'tip', string> = {
+  alert: 'var(--color-danger)',
+  warning: 'var(--color-warning)',
+  tip: 'var(--color-primary)',
+};
+
+function SectionHeading({ label, hint }: { label: string; hint?: string }) {
+  return (
+    <div className="flex items-baseline justify-between px-1">
+      <h2 className="label-caps !text-[var(--color-text-secondary)]">{label}</h2>
+      {hint && <span className="text-[11px] text-[var(--color-text-tertiary)]">{hint}</span>}
+    </div>
+  );
+}
+
+function AdvisorStat({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div className="card !p-3">
+      <p className="label-caps truncate">{label}</p>
+      <p className="text-[15px] font-extrabold tnum mt-1 tracking-tight" style={{ color: tone }}>
+        {value}
+      </p>
     </div>
   );
 }
