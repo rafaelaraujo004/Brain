@@ -2,6 +2,7 @@ import Dexie, { type Table } from 'dexie';
 import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem, PostponeRecord, InformalLoan } from '../types';
 import { buildBillDueDate, buildDueDate, getMonthName } from '../utils/formatters';
 import { installmentFraction, installmentLimit } from '../utils/bills';
+import { priorityKey } from '../priorities/priorities';
 import { collection, doc, getDoc, getDocs, limit, onSnapshot, query, setDoc, where, type Unsubscribe } from 'firebase/firestore';
 import { firestore } from './firebase';
 
@@ -1558,4 +1559,57 @@ export async function finishOpenEndedDebt(debtId: number): Promise<void> {
 /** Desfaz o encerramento: a dívida volta a cobrar todo mês. */
 export async function reopenOpenEndedDebt(debtId: number): Promise<void> {
   await db.recurringDebts.update(debtId, { totalInstallments: undefined, isActive: true });
+}
+
+/* --- Grupos de gasto escolhidos à mão --------------------------------- */
+
+/**
+ * Fixa (ou solta, com `group` null) o grupo de gasto de uma descrição de
+ * conta. Vale para todas as ocorrências dela, em qualquer mês.
+ */
+export async function setSpendingOverride(keyword: string, group: string | null): Promise<void> {
+  const settings = await getOrCreateSettings();
+  const others = (settings.spendingOverrides ?? []).filter((o) => o.keyword !== keyword);
+  await db.settings.update(settings.id as number, {
+    spendingOverrides: group ? [...others, { keyword, group }] : others,
+  });
+}
+
+/* --- Prioridades ------------------------------------------------------- */
+
+/**
+ * Registros gravados de uma conta. As chaves antigas eram só minúsculas com
+ * acento ("água"); as novas são normalizadas ("agua"). Compara pelas duas.
+ */
+async function priorityRowsFor(key: string): Promise<PriorityItem[]> {
+  const all = await db.priorities.toArray();
+  return all.filter((p) => priorityKey(p.keyword) === key);
+}
+
+/** Fixa o nível de uma conta (`null` volta ao automático). */
+export async function setPriorityLevel(key: string, level: PriorityItem['level'] | null): Promise<void> {
+  const rows = await priorityRowsFor(key);
+  await db.priorities.bulkDelete(rows.map((r) => r.id as number));
+  if (level) await db.priorities.add({ keyword: key, level });
+}
+
+/** Tira a conta da lista de prioridades. */
+export async function excludePriority(key: string): Promise<void> {
+  const rows = await priorityRowsFor(key);
+  await db.priorities.bulkDelete(rows.map((r) => r.id as number));
+  await db.priorities.add({ keyword: key, level: 'media', excluded: true });
+}
+
+/** Devolve à lista uma conta excluída (com nível automático). */
+export async function restorePriority(key: string): Promise<void> {
+  const rows = await priorityRowsFor(key);
+  await db.priorities.bulkDelete(rows.filter((r) => r.excluded).map((r) => r.id as number));
+}
+
+/**
+ * Chamado quando o usuário cadastra uma conta ou dívida: se ela tinha sido
+ * excluída das prioridades, volta. Quem cadastra de novo quer acompanhar.
+ */
+export async function reinstatePriorityOnAdd(description: string): Promise<void> {
+  await restorePriority(priorityKey(description));
 }

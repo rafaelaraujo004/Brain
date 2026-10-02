@@ -176,6 +176,8 @@ export function buildSnapshot(data: RawFinancialData, today: Date = startOfToday
   const year = today.getFullYear();
   const levels = new Map<string, OpenDebt['userLevel']>();
   for (const p of data.priorities) {
+    // Conta tirada da lista de prioridades não tem nível escolhido.
+    if (p.excluded) continue;
     levels.set(p.keyword, p.level);
     levels.set(normalize(p.keyword), p.level);
   }

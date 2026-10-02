@@ -1,9 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
-import { Check, Trash2, Edit3, ArrowRight, Undo, Repeat } from 'lucide-react';
+import { Check, Trash2, Edit3, ArrowRight, Undo, Repeat, Flag } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { getPostponeStatus } from '../../utils/bills';
 import { PostponeTimeline } from './PostponeTimeline';
-import type { Bill } from '../../types';
+import type { Bill, PriorityLevel } from '../../types';
 
 /**
  * Cartão de uma conta do mês.
@@ -24,6 +24,7 @@ export function BillItem({
   onReturn,
   onDelete,
   onEdit,
+  priority,
 }: {
   bill: Bill;
   selected: boolean;
@@ -35,6 +36,8 @@ export function BillItem({
   onReturn: () => void;
   onDelete: () => void;
   onEdit: () => void;
+  /** Prioridade em vigor da conta (aba Prioridades) */
+  priority?: PriorityLevel;
 }) {
   const [showActions, setShowActions] = useState(false);
   const longPressTimeoutRef = useRef<number | null>(null);
@@ -119,6 +122,13 @@ export function BillItem({
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
+            {priority === 'alta' && bill.status === 'pending' && (
+              <Flag
+                size={12}
+                className="text-[var(--color-danger)] flex-shrink-0"
+                aria-label="Prioridade: pagar primeiro"
+              />
+            )}
             {bill.isMonthly && (
               <Repeat
                 size={11}

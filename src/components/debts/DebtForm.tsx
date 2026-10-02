@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { X, CalendarClock, AlertTriangle } from 'lucide-react';
-import { db, updateRecurringDebtPaidInstallmentsWithSync } from '../../db/database';
+import { db, reinstatePriorityOnAdd, updateRecurringDebtPaidInstallmentsWithSync } from '../../db/database';
 import {
   buildDueDate,
   formatCurrency,
@@ -112,6 +112,8 @@ export function DebtForm({
       await updateRecurringDebtPaidInstallmentsWithSync(debt.id, boundedPaid);
     } else {
       await db.recurringDebts.add(data);
+      // Dívida cadastrada de novo volta para a lista de prioridades.
+      await reinstatePriorityOnAdd(data.description);
     }
 
     onClose();

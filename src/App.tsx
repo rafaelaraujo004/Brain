@@ -28,6 +28,9 @@ const SettingsPage = lazy(() =>
 const DebtsByAccount = lazy(() =>
   import('./pages/DebtsByAccount').then((m) => ({ default: m.DebtsByAccount }))
 );
+const Spending = lazy(() =>
+  import('./pages/Spending').then((m) => ({ default: m.Spending }))
+);
 const FinancialAdvisor = lazy(() =>
   import('./pages/FinancialAdvisor').then((m) => ({ default: m.FinancialAdvisor }))
 );
@@ -73,6 +76,14 @@ export default function App() {
                 element={
                   <Suspense fallback={<PageSpinner />}>
                     <DebtsByAccount />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/gastos"
+                element={
+                  <Suspense fallback={<PageSpinner />}>
+                    <Spending />
                   </Suspense>
                 }
               />

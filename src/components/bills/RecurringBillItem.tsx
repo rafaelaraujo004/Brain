@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { Check, RefreshCw, ArrowRight } from 'lucide-react';
+import { Check, RefreshCw, ArrowRight, Flag } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { installmentFraction, isOpenEnded, type InstallmentEntry } from '../../utils/bills';
+import type { PriorityLevel } from '../../types';
 
 /**
  * Cartão de uma parcela de dívida parcelada que ainda não virou conta.
@@ -18,6 +19,7 @@ export function RecurringBillItem({
   onLongPress,
   onToggle,
   onSkip,
+  priority,
 }: {
   entry: InstallmentEntry;
   selected: boolean;
@@ -26,6 +28,7 @@ export function RecurringBillItem({
   onLongPress: () => void;
   onToggle: () => void;
   onSkip: () => void;
+  priority?: PriorityLevel;
 }) {
   const { debt, installmentNumber, isCarried } = entry;
   const isPaid = entry.status === 'paid';
@@ -99,6 +102,13 @@ export function RecurringBillItem({
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
+            {priority === 'alta' && !isPaid && (
+              <Flag
+                size={12}
+                className="text-[var(--color-danger)] flex-shrink-0"
+                aria-label="Prioridade: pagar primeiro"
+              />
+            )}
             <RefreshCw size={11} className="text-[var(--color-primary)] flex-shrink-0" />
             <p className={`text-sm font-semibold truncate ${isPaid ? 'line-through' : ''}`}>
               {debt.description}

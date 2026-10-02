@@ -1,6 +1,12 @@
 import { useMemo, useState } from 'react';
 import { X, Check, CalendarClock, AlertTriangle } from 'lucide-react';
-import { db, setBillSeriesCost, setBillSeriesMonthly, updateBillStatusWithSync } from '../../db/database';
+import {
+  db,
+  reinstatePriorityOnAdd,
+  setBillSeriesCost,
+  setBillSeriesMonthly,
+  updateBillStatusWithSync,
+} from '../../db/database';
 import {
   buildBillDueDate,
   formatDate,
@@ -153,6 +159,8 @@ export function BillForm({
       });
       // A primeira ocorrência dá nome à série.
       await db.bills.update(newId as number, { seriesId: newId as number });
+      // Conta cadastrada de novo volta para a lista de prioridades.
+      await reinstatePriorityOnAdd(data.description);
     }
 
     // Salva num mês diferente do que está na tela: a conta "some" da lista,

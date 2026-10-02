@@ -1,24 +1,24 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Brain, Check, ChevronDown, Layers, PartyPopper, X } from 'lucide-react';
-import { useFinancialSnapshot } from '../advisor/useFinancialSnapshot';
-import { rankDebts, computeTotals } from '../advisor/strategy';
-import type { RankedDebt } from '../advisor/types';
-import { formatCurrency, formatDate, getMonthName } from '../utils/formatters';
+import { db, ensureLoanInterestBills, ensureMonthlyBillOccurrences } from '../db/database';
+import { buildLedger, groupLabel, type LedgerItem, type LedgerStatus } from '../ledger/ledger';
+import { formatCurrency, formatDate, getCurrentMonthYear, getMonthName } from '../utils/formatters';
 import { AnimatedCurrency } from '../components/AnimatedCurrency';
 import { HelpButton } from '../components/HelpModal';
 import { ListSkeleton } from '../components/PageSpinner';
 
 type GroupMode = 'conta' | 'mes' | 'tipo' | 'lista';
-type Scope = 'atraso' | 'aberto';
+type Scope = 'tudo' | 'atraso';
 
 interface Group {
   key: string;
   title: string;
   subtitle: string;
-  items: RankedDebt[];
+  items: LedgerItem[];
   total: number;
-  amount: number;
+  late: number;
 }
 
 const GROUP_LABELS: Record<GroupMode, string> = {
@@ -28,61 +28,76 @@ const GROUP_LABELS: Record<GroupMode, string> = {
   lista: 'Lista',
 };
 
-function cleanName(description: string): string {
-  return description.replace(/\s*\(\d+\/\d+\)\s*$/, '').trim();
+/** Selo de situação: cor de status + texto, nunca só a cor. */
+const STATUS_INFO: Record<LedgerStatus, { label: string; color: string; soft: string }> = {
+  atrasada: { label: 'Atrasada', color: 'var(--color-danger)', soft: 'var(--color-danger-soft)' },
+  a_vencer: { label: 'A vencer', color: 'var(--color-text-secondary)', soft: 'var(--color-surface-2)' },
+  futura: { label: 'Futuras', color: 'var(--color-primary)', soft: 'var(--color-primary-soft)' },
+  agiota: { label: 'Valor pego', color: 'var(--color-warning)', soft: 'var(--color-warning-soft)' },
+};
+
+function count(n: number, one: string, many: string) {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
-function monthTitle(key: string): string {
-  const [year, month] = key.split('-').map(Number);
-  return `${getMonthName(month)}/${year}`;
-}
-
-function buildGroups(debts: RankedDebt[], mode: GroupMode): Group[] {
-  if (mode === 'lista') {
-    return debts.map((d) => ({
-      key: d.id,
-      title: d.description,
-      subtitle: d.originLabel,
-      items: [d],
-      total: d.updatedAmount,
-      amount: d.amount,
-    }));
-  }
-
-  const map = new Map<string, RankedDebt[]>();
-  for (const debt of debts) {
-    const key = mode === 'conta' ? debt.groupKey : mode === 'mes' ? debt.originKey : debt.category;
-    const list = map.get(key) ?? [];
-    list.push(debt);
-    map.set(key, list);
-  }
-
-  const groups = [...map.entries()].map(([key, items]) => {
-    const first = items[0];
-    const title =
-      mode === 'conta' ? cleanName(first.description) : mode === 'mes' ? monthTitle(key) : first.categoryLabel;
-    const oldest = items.reduce((a, b) => (a.daysLate >= b.daysLate ? a : b));
-    const count = `${items.length} ${items.length === 1 ? 'dívida' : 'dívidas'}`;
-    const subtitle =
-      mode === 'conta'
-        ? items.length > 1
-          ? `${items.length} faturas · desde ${oldest.originLabel}`
-          : `${first.originLabel}${first.postponedTimes ? ` · adiada ${first.postponedTimes}x` : ''}`
-        : mode === 'mes'
-        ? `${count} · venceram neste mês`
-        : count;
-    return {
-      key,
-      title,
-      subtitle,
-      items: [...items].sort((a, b) => a.originalDueDate.getTime() - b.originalDueDate.getTime()),
-      total: items.reduce((s, d) => s + d.updatedAmount, 0),
-      amount: items.reduce((s, d) => s + d.amount, 0),
-    };
+function buildGroups(items: LedgerItem[], mode: GroupMode, accountSummary: Map<string, string>): Group[] {
+  const make = (key: string, title: string, list: LedgerItem[], subtitle: string): Group => ({
+    key,
+    title,
+    subtitle,
+    items: list,
+    total: list.reduce((s, i) => s + i.amount, 0),
+    late: list.filter((i) => i.status === 'atrasada').reduce((s, i) => s + i.amount, 0),
   });
 
-  if (mode === 'mes') return groups.sort((a, b) => a.key.localeCompare(b.key));
-  return groups.sort((a, b) => b.total - a.total);
+  if (mode === 'lista') {
+    return items.map((item) => make(item.id, `${item.accountName} · ${item.title}`, [item], item.detail));
+  }
+
+  const map = new Map<string, { title: string; sort: number; list: LedgerItem[] }>();
+  for (const item of items) {
+    let key: string;
+    let title: string;
+    let sort = 0;
+    if (mode === 'conta') {
+      key = item.accountKey;
+      title = item.accountName;
+    } else if (mode === 'tipo') {
+      key = item.group;
+      title = groupLabel(item.group);
+    } else if (item.status === 'futura') {
+      key = 'futuras';
+      title = 'Parcelas dos próximos meses';
+      sort = Number.MAX_SAFE_INTEGER - 1;
+    } else if (item.status === 'agiota' || !item.dueDate) {
+      key = 'agiota';
+      title = 'Agiota — sem vencimento';
+      sort = Number.MAX_SAFE_INTEGER;
+    } else {
+      const m = item.dueDate.getMonth() + 1;
+      const y = item.dueDate.getFullYear();
+      key = `${y}-${m}`;
+      title = `Vencimento em ${getMonthName(m)}/${y}`;
+      sort = y * 12 + m;
+    }
+    const entry = map.get(key) ?? { title, sort, list: [] };
+    entry.list.push(item);
+    map.set(key, entry);
+  }
+
+  const groups = [...map.entries()].map(([key, { title, sort, list }]) => {
+    const late = list.filter((i) => i.status === 'atrasada').length;
+    const subtitle =
+      mode === 'conta'
+        ? accountSummary.get(key) ?? ''
+        : [count(list.length, 'item', 'itens'), late ? count(late, 'atrasado', 'atrasados') : '']
+            .filter(Boolean)
+            .join(' · ');
+    return { ...make(key, title, list, subtitle), sort };
+  });
+
+  if (mode === 'mes') return groups.sort((a, b) => a.sort - b.sort);
+  return groups.sort((a, b) => b.late - a.late || b.total - a.total);
 }
 
 /**
@@ -129,24 +144,53 @@ function usePressable(onLongPress: () => void, onTap: () => void) {
   };
 }
 
+/**
+ * Aba Totais: tudo o que se deve, conta por conta.
+ *
+ * Soma contas em aberto (atrasadas e a vencer, em qualquer mês), as parcelas
+ * que faltam das dívidas e o valor pego com agiota. Calculada ao vivo a
+ * partir do banco — pagar, adiar ou cadastrar algo muda os números na hora.
+ */
 export function DebtsByAccount() {
-  const snapshot = useFinancialSnapshot();
   const navigate = useNavigate();
   const [mode, setMode] = useState<GroupMode>('conta');
-  const [scope, setScope] = useState<Scope>('atraso');
+  const [scope, setScope] = useState<Scope>('tudo');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const debts = useMemo(() => {
-    if (!snapshot) return [];
-    if (scope === 'atraso') return snapshot.overdue;
-    return rankDebts([...snapshot.overdue, ...snapshot.upcoming]);
-  }, [snapshot, scope]);
+  // Faturas do mês corrente que nascem sozinhas (contas mensais, agiota).
+  useEffect(() => {
+    const { month, year } = getCurrentMonthYear();
+    void (async () => {
+      await ensureLoanInterestBills(month, year);
+      await ensureMonthlyBillOccurrences(month, year);
+    })();
+  }, []);
 
-  const totals = useMemo(() => computeTotals(debts), [debts]);
-  const groups = useMemo(() => buildGroups(debts, mode), [debts, mode]);
-  const selectedDebts = useMemo(() => debts.filter((d) => selected.has(d.id)), [debts, selected]);
-  const selectedTotals = useMemo(() => computeTotals(selectedDebts), [selectedDebts]);
+  const raw = useLiveQuery(async () => {
+    const [bills, debts, loans] = await Promise.all([
+      db.bills.toArray(),
+      db.recurringDebts.toArray(),
+      db.loans.toArray(),
+    ]);
+    return { bills, debts, loans };
+  }, []);
+
+  const ledger = useMemo(() => (raw ? buildLedger(raw.bills, raw.debts, raw.loans) : null), [raw]);
+
+  const items = useMemo(() => {
+    if (!ledger) return [];
+    return scope === 'atraso' ? ledger.items.filter((i) => i.status === 'atrasada') : ledger.items;
+  }, [ledger, scope]);
+
+  const accountSummary = useMemo(
+    () => new Map((ledger?.accounts ?? []).map((a) => [a.key, a.summary])),
+    [ledger]
+  );
+  const groups = useMemo(() => buildGroups(items, mode, accountSummary), [items, mode, accountSummary]);
+  const selectedItems = useMemo(() => items.filter((i) => selected.has(i.id)), [items, selected]);
+  const selectedTotal = selectedItems.reduce((s, i) => s + i.amount, 0);
+  const selectedLate = selectedItems.filter((i) => i.status === 'atrasada').reduce((s, i) => s + i.amount, 0);
   const selecting = selected.size > 0;
 
   const toggleIds = useCallback((ids: string[]) => {
@@ -171,22 +215,11 @@ export function DebtsByAccount() {
 
   const askAboutSelection = () => {
     navigate('/assistente', {
-      state: {
-        scopeIds: [...selected],
-        ask: 'Qual a melhor forma de quitar estas dívidas?',
-      },
+      state: { scopeIds: [...selected], ask: 'Qual a melhor forma de quitar estas dívidas?' },
     });
   };
 
-  // Faixas da barra: essenciais, caras e o resto.
-  const tiers = useMemo(() => {
-    const sum = (t: number[]) => debts.filter((d) => t.includes(d.tier)).reduce((s, d) => s + d.updatedAmount, 0);
-    return [
-      { label: 'Essenciais', value: sum([0]), color: 'var(--color-danger)' },
-      { label: 'Com juros', value: sum([1]), color: 'var(--color-warning)' },
-      { label: 'Demais', value: sum([2, 3]), color: 'var(--color-primary)' },
-    ];
-  }, [debts]);
+  const totals = ledger?.totals;
 
   return (
     <div className={`space-y-4 ${selecting ? 'pb-36' : 'pb-4'}`}>
@@ -203,96 +236,58 @@ export function DebtsByAccount() {
           </span>
           <div className="min-w-0">
             <h1 className="text-xl font-extrabold tracking-tight">Dívidas por conta</h1>
-            <p className="text-xs text-[var(--color-text-tertiary)] truncate">
-              Quanto você deve em cada conta, somando todos os meses
-            </p>
+            <p className="text-xs text-[var(--color-text-tertiary)] truncate">Tudo o que você deve, conta por conta</p>
           </div>
         </div>
         <HelpButton
           title="Dívidas por conta"
           items={[
-            { icon: '🧮', title: 'Total por conta', description: 'Cada cartão soma todas as faturas em aberto da mesma conta — energia de agosto, setembro e outubro viram um total só.' },
-            { icon: '👆', title: 'Pressione e segure', description: 'Segure uma conta ou uma fatura para começar a selecionar. Depois, cada toque marca ou desmarca. A soma aparece embaixo.' },
-            { icon: '📂', title: 'Ver as faturas', description: 'Toque na seta do cartão para ver cada fatura com o mês de origem, o vencimento e quantas vezes foi adiada.' },
-            { icon: '💸', title: 'Encargos', description: 'O valor com encargos é uma estimativa de multa e juros pelo tipo da conta. Ajuste em Contas → Editar → Tipo e encargos.' },
-            { icon: '🧠', title: 'Perguntar', description: 'Com dívidas selecionadas, toque em Perguntar para o assistente analisar só elas.' },
+            { icon: '🧮', title: 'O que entra', description: 'Contas em aberto de qualquer mês (atrasadas e a vencer), as parcelas que faltam das dívidas e o valor pego com agiota.' },
+            { icon: '🔴', title: 'Atrasada', description: 'Passou do vencimento. Uma conta adiada continua atrasada desde o vencimento original — o card mostra quando venceu e em que mês ela está.' },
+            { icon: '📅', title: 'Parcelas futuras', description: 'As parcelas dos próximos meses aparecem somadas numa linha só. Dívida sem número de parcelas mostra só até o mês atual.' },
+            { icon: '👆', title: 'Pressione e segure', description: 'Segure uma conta ou um item para selecionar. Depois, cada toque marca ou desmarca. A soma aparece embaixo.' },
+            { icon: '🧠', title: 'Perguntar', description: 'Com itens atrasados selecionados, o assistente analisa só eles.' },
           ]}
         />
       </header>
 
-      {snapshot === undefined ? (
+      {!ledger || !totals ? (
         <ListSkeleton />
       ) : (
         <>
-          {/* --- Total ---------------------------------------------------- */}
+          {/* --- Total --------------------------------------------------- */}
           <section className="card card-feature animate-rise">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="label-caps">{scope === 'atraso' ? 'Total em atraso' : 'Total em aberto'}</p>
-                <AnimatedCurrency
-                  value={totals.updatedAmount}
-                  className={`money-hero block mt-1 ${totals.count > 0 ? 'text-[var(--color-danger)]' : 'text-gradient'}`}
-                />
-                <p className="text-xs text-[var(--color-text-secondary)] mt-1.5 tnum">
-                  {formatCurrency(totals.amount)} das contas
-                  {totals.charges > 0 && (
-                    <>
-                      {' '}+ <span className="font-semibold text-[var(--color-danger)]">{formatCurrency(totals.charges)}</span> de
-                      multa e juros (estim.)
-                    </>
-                  )}
-                </p>
-              </div>
-              <div className="text-right flex-shrink-0">
-                <p className="text-2xl font-extrabold tnum leading-none">{totals.count}</p>
-                <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">
-                  {totals.count === 1 ? 'dívida' : 'dívidas'}
-                </p>
-              </div>
+            <p className="label-caps">Você deve no total</p>
+            <AnimatedCurrency
+              value={totals.total}
+              className="money-hero block mt-1 text-gradient"
+              style={{ fontVariantNumeric: 'normal' }}
+            />
+            <div className="grid grid-cols-2 gap-2 mt-4">
+              <Tile label="Em atraso" value={totals.late} status="atrasada" hint={totals.lateCount ? count(totals.lateCount, 'item', 'itens') : undefined} />
+              <Tile label="A vencer" value={totals.upcoming} status="a_vencer" />
+              <Tile label="Parcelas futuras" value={totals.future} status="futura" />
+              <Tile label="Agiota" value={totals.loanPrincipal} status="agiota" hint={totals.loanPrincipal > 0 ? 'valor pego' : undefined} />
             </div>
-
-            {totals.updatedAmount > 0 && (
-              <>
-                <div className="meter mt-4">
-                  {tiers.map((t) =>
-                    t.value > 0 ? (
-                      <div
-                        key={t.label}
-                        className="h-full"
-                        style={{ width: `${(t.value / totals.updatedAmount) * 100}%`, background: t.color }}
-                      />
-                    ) : null
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5">
-                  {tiers.filter((t) => t.value > 0).map((t) => (
-                    <span key={t.label} className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-secondary)] tnum">
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: t.color }} />
-                      {t.label} {formatCurrency(t.value)}
-                    </span>
-                  ))}
-                </div>
-                {totals.monthlyCost > 0 && (
-                  <p className="text-[11px] text-[var(--color-text-tertiary)] mt-2.5">
-                    Parado, cresce cerca de{' '}
-                    <span className="font-bold text-[var(--color-warning)] tnum">{formatCurrency(totals.monthlyCost)}</span> por
-                    mês{totals.oldest ? ` · a mais antiga é de ${totals.oldest.originLabel}` : ''}.
-                  </p>
-                )}
-              </>
+            {totals.oldestLate && (
+              <p className="text-[11px] text-[var(--color-text-tertiary)] mt-3 leading-relaxed">
+                Atraso mais antigo: <span className="font-semibold text-[var(--color-text-secondary)]">{totals.oldestLate.accountName}</span>,
+                {' '}venceu em {totals.oldestLate.dueDate ? formatDate(totals.oldestLate.dueDate) : '—'}.
+              </p>
             )}
           </section>
 
-          {/* --- Filtros -------------------------------------------------- */}
+          {/* --- Filtros ------------------------------------------------- */}
           <div className="space-y-2">
             <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-[var(--color-surface-2)] border border-[var(--color-border)]">
-              {(['atraso', 'aberto'] as Scope[]).map((s) => (
+              {(['tudo', 'atraso'] as Scope[]).map((s) => (
                 <button
                   key={s}
                   onClick={() => {
                     setScope(s);
                     setSelected(new Set());
                   }}
+                  aria-pressed={scope === s}
                   className="py-2 rounded-xl text-xs font-bold transition-all duration-200"
                   style={{
                     background: scope === s ? 'var(--color-surface)' : 'transparent',
@@ -300,7 +295,7 @@ export function DebtsByAccount() {
                     boxShadow: scope === s ? 'var(--shadow-md)' : 'none',
                   }}
                 >
-                  {s === 'atraso' ? 'Só atrasadas' : 'Tudo em aberto'}
+                  {s === 'tudo' ? 'Tudo que devo' : 'Só em atraso'}
                 </button>
               ))}
             </div>
@@ -309,6 +304,7 @@ export function DebtsByAccount() {
                 <button
                   key={m}
                   onClick={() => setMode(m)}
+                  aria-pressed={mode === m}
                   className="flex-1 py-1.5 rounded-xl text-[11px] font-bold border transition-colors duration-200"
                   style={{
                     background: mode === m ? 'var(--color-primary-soft)' : 'transparent',
@@ -321,11 +317,11 @@ export function DebtsByAccount() {
               ))}
             </div>
             <p className="text-[11px] text-[var(--color-text-tertiary)] px-1">
-              {selecting ? 'Toque para marcar ou desmarcar.' : 'Pressione e segure uma conta para selecionar e somar.'}
+              {selecting ? 'Toque para marcar ou desmarcar.' : 'Toque para ver os itens · pressione e segure para selecionar e somar.'}
             </p>
           </div>
 
-          {/* --- Grupos --------------------------------------------------- */}
+          {/* --- Grupos -------------------------------------------------- */}
           {groups.length === 0 ? (
             <div className="card text-center py-10">
               <div
@@ -334,11 +330,9 @@ export function DebtsByAccount() {
               >
                 <PartyPopper size={26} />
               </div>
-              <p className="text-sm font-semibold">
-                {scope === 'atraso' ? 'Nenhuma dívida em atraso' : 'Nada em aberto'}
-              </p>
+              <p className="text-sm font-semibold">{scope === 'atraso' ? 'Nada em atraso' : 'Você não deve nada'}</p>
               <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
-                {scope === 'atraso' ? 'Tudo o que venceu foi pago.' : 'Todas as contas estão pagas.'}
+                {scope === 'atraso' ? 'Tudo o que venceu foi pago.' : 'Nenhuma conta, parcela ou empréstimo em aberto.'}
               </p>
             </div>
           ) : (
@@ -368,25 +362,25 @@ export function DebtsByAccount() {
             style={{ background: 'var(--surface-elevated)', borderColor: 'var(--color-primary)', boxShadow: 'var(--shadow-lg)' }}
           >
             <div className="min-w-0 flex-1">
-              <p className="label-caps">
-                {selectedDebts.length} {selectedDebts.length === 1 ? 'selecionada' : 'selecionadas'}
-              </p>
+              <p className="label-caps">{count(selectedItems.length, 'selecionado', 'selecionados')}</p>
               <p className="text-xl font-extrabold tnum tracking-tight text-[var(--color-primary)] leading-tight">
-                {formatCurrency(selectedTotals.updatedAmount)}
+                {formatCurrency(selectedTotal)}
               </p>
-              {selectedTotals.charges > 0 && (
+              {selectedLate > 0 && selectedLate < selectedTotal && (
                 <p className="text-[10px] text-[var(--color-text-tertiary)] tnum truncate">
-                  {formatCurrency(selectedTotals.amount)} + {formatCurrency(selectedTotals.charges)} de encargos
+                  {formatCurrency(selectedLate)} em atraso
                 </p>
               )}
             </div>
-            <button
-              onClick={askAboutSelection}
-              className="btn-primary !py-2.5 !px-3.5 text-xs flex items-center gap-1.5 flex-shrink-0"
-            >
-              <Brain size={15} />
-              Perguntar
-            </button>
+            {selectedLate > 0 && (
+              <button
+                onClick={askAboutSelection}
+                className="btn-primary !py-2.5 !px-3.5 text-xs flex items-center gap-1.5 flex-shrink-0"
+              >
+                <Brain size={15} />
+                Perguntar
+              </button>
+            )}
             <button
               onClick={() => setSelected(new Set())}
               aria-label="Limpar seleção"
@@ -398,6 +392,19 @@ export function DebtsByAccount() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function Tile({ label, value, status, hint }: { label: string; value: number; status: LedgerStatus; hint?: string }) {
+  return (
+    <div className="rounded-2xl p-2.5 border" style={{ background: 'var(--color-surface-2)', borderColor: 'var(--color-border)' }}>
+      <p className="flex items-center gap-1.5 label-caps !text-[10px] truncate">
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: STATUS_INFO[status].color }} />
+        {label}
+      </p>
+      <p className="text-[15px] font-extrabold tnum tracking-tight mt-0.5">{value > 0 ? formatCurrency(value) : '—'}</p>
+      {hint && <p className="text-[10px] text-[var(--color-text-tertiary)]">{hint}</p>}
     </div>
   );
 }
@@ -436,11 +443,11 @@ function GroupCard({
   onToggleIds: (ids: string[]) => void;
   onExpand: () => void;
 }) {
-  const ids = group.items.map((d) => d.id);
-  const count = ids.filter((id) => selected.has(id)).length;
-  const state: 'all' | 'some' | 'none' = count === 0 ? 'none' : count === ids.length ? 'all' : 'some';
-  const lead = group.items[0];
-  const accent = lead.tier === 0 ? 'var(--color-danger)' : lead.tier === 1 ? 'var(--color-warning)' : 'var(--color-primary)';
+  const ids = group.items.map((i) => i.id);
+  const chosen = ids.filter((id) => selected.has(id)).length;
+  const state: 'all' | 'some' | 'none' = chosen === 0 ? 'none' : chosen === ids.length ? 'all' : 'some';
+  const single = group.items.length === 1 ? group.items[0] : null;
+  const accent = group.late > 0 ? 'var(--color-danger)' : single ? STATUS_INFO[single.status].color : 'var(--color-primary)';
 
   const press = usePressable(
     () => onToggleIds(ids),
@@ -465,27 +472,21 @@ function GroupCard({
           <span className="w-1.5 self-stretch rounded-full flex-shrink-0" style={{ background: accent }} />
         )}
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <p className="text-sm font-bold truncate">{group.title}</p>
-            {group.items.length > 1 && (
-              <span
-                className="text-[10px] font-extrabold tnum px-1.5 py-0.5 rounded-md flex-shrink-0"
-                style={{ background: 'var(--color-danger-soft)', color: 'var(--color-danger)' }}
-              >
-                ×{group.items.length}
-              </span>
-            )}
-          </div>
-          <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 truncate">{group.subtitle}</p>
+          <p className="text-sm font-bold truncate">{group.title}</p>
+          <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 leading-snug">{group.subtitle}</p>
         </div>
         <div className="text-right flex-shrink-0">
-          <p className="money-lg text-[15px]" style={{ color: accent }}>
-            {formatCurrency(group.total)}
-          </p>
-          {group.total - group.amount > 0.005 && (
-            <p className="text-[10px] text-[var(--color-text-tertiary)] tnum">
-              {formatCurrency(group.amount)} + encargos
-            </p>
+          <p className="money-lg text-[15px]">{formatCurrency(group.total)}</p>
+          {group.late > 0 && group.late < group.total && (
+            <p className="text-[10px] font-semibold text-[var(--color-danger)] tnum">{formatCurrency(group.late)} em atraso</p>
+          )}
+          {single && (
+            <span
+              className="inline-block mt-0.5 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-md"
+              style={{ background: STATUS_INFO[single.status].soft, color: STATUS_INFO[single.status].color }}
+            >
+              {STATUS_INFO[single.status].label}
+            </span>
           )}
         </div>
         {canExpand && !selecting && (
@@ -497,15 +498,15 @@ function GroupCard({
         )}
       </div>
 
-      {(showItems || (selecting && group.items.length > 1)) && (
+      {(showItems || (selecting && group.items.length > 1 && canExpand)) && (
         <div className="border-t border-[var(--color-border)] divide-y divide-[var(--color-border)] animate-rise">
-          {group.items.map((debt) => (
-            <DebtRow
-              key={debt.id}
-              debt={debt}
+          {group.items.map((item) => (
+            <ItemRow
+              key={item.id}
+              item={item}
               selecting={selecting}
-              checked={selected.has(debt.id)}
-              onToggle={() => onToggleIds([debt.id])}
+              checked={selected.has(item.id)}
+              onToggle={() => onToggleIds([item.id])}
             />
           ))}
         </div>
@@ -514,13 +515,13 @@ function GroupCard({
   );
 }
 
-function DebtRow({
-  debt,
+function ItemRow({
+  item,
   selecting,
   checked,
   onToggle,
 }: {
-  debt: RankedDebt;
+  item: LedgerItem;
   selecting: boolean;
   checked: boolean;
   onToggle: () => void;
@@ -528,25 +529,23 @@ function DebtRow({
   const press = usePressable(onToggle, () => {
     if (selecting) onToggle();
   });
+  const info = STATUS_INFO[item.status];
 
   return (
     <div {...press} className="flex items-center gap-3 px-3.5 py-2.5 cursor-pointer select-none" style={{ background: 'var(--color-surface-2)' }}>
       {selecting && <SelectBox state={checked ? 'all' : 'none'} />}
       <div className="min-w-0 flex-1">
-        <p className="text-[12px] font-semibold truncate">
-          {debt.originLabel}
-          {debt.installmentNumber ? ` · parcela ${debt.installmentNumber}` : ''}
-        </p>
-        <p className="text-[11px] text-[var(--color-text-secondary)] tnum truncate">
-          {debt.daysLate > 0 ? `venceu ${formatDate(debt.originalDueDate)} · ${debt.overdueLabel}` : `vence ${formatDate(debt.originalDueDate)}`}
-          {debt.postponedTimes > 0 ? ` · adiada ${debt.postponedTimes}x` : ''}
-        </p>
+        <p className="text-[12px] font-semibold truncate">{item.title}</p>
+        <p className="text-[11px] text-[var(--color-text-secondary)] leading-snug tnum">{item.detail}</p>
       </div>
       <div className="text-right flex-shrink-0">
-        <p className="text-[13px] font-bold tnum">{formatCurrency(debt.updatedAmount)}</p>
-        {debt.charges > 0 && (
-          <p className="text-[10px] text-[var(--color-text-tertiary)] tnum">{formatCurrency(debt.amount)} + enc.</p>
-        )}
+        <p className="text-[13px] font-bold tnum">{formatCurrency(item.amount)}</p>
+        <span
+          className="inline-block text-[9.5px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-md mt-0.5"
+          style={{ background: info.soft, color: info.color }}
+        >
+          {info.label}
+        </span>
       </div>
     </div>
   );

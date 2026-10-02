@@ -12,14 +12,17 @@ import {
   Zap,
   ChevronDown,
   ChevronUp,
-  Settings2,
   RefreshCw,
   MessageCircle,
   ListChecks,
+  Flag,
 } from 'lucide-react';
 import { useFinancialSnapshot } from '../advisor/useFinancialSnapshot';
 import { AskPanel } from '../components/advisor/AskPanel';
 import { ListSkeleton } from '../components/PageSpinner';
+import { PrioritiesPanel } from '../components/priorities/PrioritiesPanel';
+import { usePriorities } from '../priorities/usePriorities';
+import { PRIORITY_INFO, priorityKey } from '../priorities/priorities';
 import { db, getOrCreateSettings } from '../db/database';
 import { formatCurrency, formatDate, getMonthName, startOfToday } from '../utils/formatters';
 import { getPostponeStatus, getRecurringStatusForMonth, installmentFraction, isOpenEnded } from '../utils/bills';
@@ -78,14 +81,6 @@ function isCriticalItem(item: SimItem, today: Date = startOfToday()): boolean {
   return daysUntilDue >= 0 && daysUntilDue <= CRITICAL_WINDOW_DAYS;
 }
 
-interface PriorityEntry {
-  key: string;
-  description: string;
-  level: PriorityLevel;
-  type: 'bill' | 'recurring';
-  value: number;
-}
-
 interface ActionStep {
   type: 'alert' | 'warning' | 'tip';
   title: string;
@@ -94,12 +89,6 @@ interface ActionStep {
 }
 
 const LEVEL_SCORE: Record<PriorityLevel, number> = { alta: 10, media: 5, baixa: 2 };
-const LEVEL_COLORS: Record<PriorityLevel, { bg: string; text: string; label: string }> = {
-  alta: { bg: 'bg-red-500/15', text: 'text-red-500', label: 'Alta' },
-  media: { bg: 'bg-yellow-500/15', text: 'text-yellow-500', label: 'Média' },
-  baixa: { bg: 'bg-blue-500/15', text: 'text-blue-500', label: 'Baixa' },
-};
-const LEVEL_CYCLE: PriorityLevel[] = ['baixa', 'media', 'alta'];
 
 function getRecurringForCurrentMonth(debt: RecurringDebt, month: number, year: number) {
   const recurring = getRecurringStatusForMonth(debt, month, year);
@@ -122,7 +111,7 @@ export function FinancialAdvisor() {
   const location = useLocation();
   const navigate = useNavigate();
   const navState = (location.state ?? null) as AdvisorNavState | null;
-  const [tab, setTab] = useState<'perguntar' | 'plano'>('perguntar');
+  const [tab, setTab] = useState<'perguntar' | 'plano' | 'prioridades'>('perguntar');
   // Lidos uma vez: a pergunta vinda de "Dívidas por conta" não pode ser
   // reenviada ao recarregar a página.
   const [initialAsk] = useState(navState?.ask);
@@ -145,13 +134,9 @@ export function FinancialAdvisor() {
   const [showSimulation, setShowSimulation] = useState(false);
   const [manualSelections, setManualSelections] = useState<Set<string>>(new Set());
   const [simMode, setSimMode] = useState<'auto' | 'manual'>('auto');
-  const [showPriorities, setShowPriorities] = useState(false);
   const [showAllSuggestions, setShowAllSuggestions] = useState(false);
 
-  const priorities = useLiveQuery(
-    () => db.priorities.toArray(),
-    []
-  );
+  const priorityList = usePriorities();
 
   const bills = useLiveQuery(
     () => db.bills.where({ month, year }).toArray(),
@@ -186,15 +171,18 @@ export function FinancialAdvisor() {
     return salary + extra + income;
   }, [monthlyConfig, settings, extraFunds, incomeSources]);
 
-  // Priority map for lookups
-  const prioMap = useMemo(() => new Map((priorities ?? []).map((p) => [p.keyword, p.level])), [priorities]);
+  // Nível em vigor (automático ou escolhido) de cada conta.
+  const levelFor = useCallback(
+    (description: string) => priorityList?.levelOf.get(priorityKey(description)),
+    [priorityList]
+  );
 
   // Build pending items for simulation
   const pendingItems = useMemo((): SimItem[] => {
     const items: SimItem[] = [];
 
     const getScore = (desc: string): number => {
-      const level = prioMap.get(desc.toLowerCase());
+      const level = levelFor(desc);
       return level ? LEVEL_SCORE[level] : 0;
     };
 
@@ -245,7 +233,7 @@ export function FinancialAdvisor() {
       if (b.daysLate !== a.daysLate) return b.daysLate - a.daysLate;
       return a.dueDate.getTime() - b.dueDate.getTime();
     });
-  }, [bills, recurringDebts, month, year, prioMap]);
+  }, [bills, recurringDebts, month, year, levelFor]);
 
   // Smart suggestions
   const suggestions = useMemo((): Suggestion[] => {
@@ -355,11 +343,9 @@ export function FinancialAdvisor() {
     }
 
     // Tip: high-priority bills unpaid
-    const highPriorityUnpaid = pendingBills.filter((b) => {
-      const base = (b.originalDescription ?? b.description).toLowerCase();
-      const level = prioMap.get(base);
-      return level === 'alta';
-    });
+    const highPriorityUnpaid = pendingBills.filter(
+      (b) => levelFor(b.originalDescription ?? b.description) === 'alta'
+    );
     if (highPriorityUnpaid.length > 0) {
       tips.push({
         type: 'tip',
@@ -405,7 +391,7 @@ export function FinancialAdvisor() {
     }
 
     return tips.sort((a, b) => b.priority - a.priority);
-  }, [bills, recurringDebts, allBills, totalIncome, currentDay, month, year, prioMap, isCurrentSelectedMonth, isPastSelectedMonth]);
+  }, [bills, recurringDebts, allBills, totalIncome, currentDay, month, year, levelFor, isCurrentSelectedMonth, isPastSelectedMonth]);
 
   const pendingTotal = useMemo(
     () => pendingItems.reduce((sum, item) => sum + item.value, 0),
@@ -553,67 +539,6 @@ export function FinancialAdvisor() {
     });
   };
 
-  // Build unique list of bills + recurring debts for priority editor
-  const priorityEntries = useMemo((): PriorityEntry[] => {
-    const entries: PriorityEntry[] = [];
-    const seen = new Set<string>();
-
-    // Get unique bill descriptions (use originalDescription to avoid duplicates from carry-over)
-    bills?.forEach((b) => {
-      if (b.status === 'skipped') return;
-      const baseDesc = b.originalDescription ?? b.description;
-      const key = baseDesc.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      entries.push({
-        key,
-        description: baseDesc,
-        level: prioMap.get(key) ?? 'media',
-        type: 'bill',
-        value: b.finalValue,
-      });
-    });
-
-    // Get unique recurring debts
-    recurringDebts?.forEach((d) => {
-      const key = d.description.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      entries.push({
-        key,
-        description: d.description,
-        level: prioMap.get(key) ?? 'media',
-        type: 'recurring',
-        value: d.installmentValue,
-      });
-    });
-
-    // Also show priorities that exist in DB but not in current bills (from other months)
-    priorities?.forEach((p) => {
-      if (seen.has(p.keyword)) return;
-      seen.add(p.keyword);
-      entries.push({
-        key: p.keyword,
-        description: p.keyword,
-        level: p.level,
-        type: 'bill',
-        value: 0,
-      });
-    });
-
-    return entries.sort((a, b) => LEVEL_SCORE[b.level] - LEVEL_SCORE[a.level]);
-  }, [bills, recurringDebts, prioMap]);
-
-  const cyclePriority = useCallback(async (key: string, currentLevel: PriorityLevel) => {
-    const nextLevel = LEVEL_CYCLE[(LEVEL_CYCLE.indexOf(currentLevel) + 1) % LEVEL_CYCLE.length];
-    const existing = await db.priorities.where('keyword').equals(key).first();
-    if (existing) {
-      await db.priorities.update(existing.id!, { level: nextLevel });
-    } else {
-      await db.priorities.add({ keyword: key, level: nextLevel });
-    }
-  }, []);
-
   return (
     <div className="space-y-4 pb-4">
       <header className="flex items-center justify-between gap-2 pt-1">
@@ -643,14 +568,16 @@ export function FinancialAdvisor() {
             { icon: '💡', title: 'Sugestões', description: 'Mostra primeiro o que tem maior impacto, com opção de ver mais.' },
             { icon: '🧮', title: 'Simulador', description: 'Informe um valor e veja quais contas cabem nesse orçamento.' },
             { icon: '🔄', title: 'Auto vs Manual', description: 'No modo Auto, as contas mais prioritárias são selecionadas. No Manual, você escolhe.' },
+            { icon: '🚩', title: 'Prioridades', description: 'Cada conta tem um nível automático (Pagar primeiro, Normal, Pode esperar) com o motivo. Fixe outro nível ou tire a conta da lista na aba Prioridades.' },
           ]}
         />
       </header>
 
-      <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+      <div className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-[var(--color-surface-2)] border border-[var(--color-border)]">
         {([
           ['perguntar', 'Perguntar', MessageCircle],
-          ['plano', 'Plano do mês', ListChecks],
+          ['plano', 'Plano', ListChecks],
+          ['prioridades', 'Prioridades', Flag],
         ] as const).map(([key, label, Icon]) => (
           <button
             key={key}
@@ -679,6 +606,8 @@ export function FinancialAdvisor() {
         ) : (
           <ListSkeleton />
         ))}
+
+      {tab === 'prioridades' && <PrioritiesPanel />}
 
       {tab === 'plano' && (
       <>
@@ -799,73 +728,6 @@ export function FinancialAdvisor() {
         )}
       </section>
 
-      {/* Priority Editor */}
-      <div className="space-y-2">
-        <button
-          onClick={() => setShowPriorities(!showPriorities)}
-          className="card card-interactive flex items-center justify-between w-full !py-3"
-        >
-          <div className="flex items-center gap-2.5">
-            <span
-              className="w-8 h-8 rounded-xl flex items-center justify-center"
-              style={{ background: 'var(--color-primary-soft)', color: 'var(--color-primary)' }}
-            >
-              <Settings2 size={16} />
-            </span>
-            <span className="text-sm font-bold">Gerenciar prioridades</span>
-          </div>
-          {showPriorities ? (
-            <ChevronUp size={18} className="text-[var(--color-text-tertiary)]" />
-          ) : (
-            <ChevronDown size={18} className="text-[var(--color-text-tertiary)]" />
-          )}
-        </button>
-
-        {showPriorities && (
-          <div className="space-y-3">
-            <div className="card">
-              <p className="text-xs text-[var(--color-text-secondary)]">
-                Toque no nível de cada conta para alternar entre Alta, Média e Baixa. A prioridade é usada no simulador automático.
-              </p>
-            </div>
-
-            {priorityEntries.length > 0 ? (
-              <div className="space-y-1">
-                {priorityEntries.map((entry) => {
-                  const colors = LEVEL_COLORS[entry.level];
-                  return (
-                    <div
-                      key={entry.key}
-                      className="card flex items-center gap-3 py-2.5"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{entry.description}</p>
-                        <p className="text-xs text-[var(--color-text-secondary)]">
-                          {entry.type === 'recurring' ? 'Dívida recorrente' : 'Conta'}
-                          {entry.value > 0 && ` · ${formatCurrency(entry.value)}`}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => cyclePriority(entry.key, entry.level)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold ${colors.bg} ${colors.text} transition-colors min-w-[60px] text-center`}
-                      >
-                        {colors.label}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="card text-center py-4">
-                <p className="text-xs text-[var(--color-text-secondary)]">
-                  Nenhuma conta ou dívida cadastrada ainda.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
       {/* Payment Simulator */}
       <div className="space-y-3">
         <button
@@ -953,13 +815,11 @@ export function FinancialAdvisor() {
                           <div className="flex items-center gap-2 mt-0.5">
                             <span className="text-xs text-[var(--color-text-secondary)]">Dia {item.dueDay}</span>
                             {(() => {
-                              const baseKey = item.description.replace(/\s*\[ATRASADA.*\]/, '').replace(/\s*\(parcela.*\)/i, '').trim();
-                              const level = prioMap.get(baseKey);
+                              const level = levelFor(item.description);
                               if (!level) return null;
-                              const colors = LEVEL_COLORS[level];
                               return (
-                                <span className={`text-xs font-medium ${colors.text}`}>
-                                  ★ {colors.label}
+                                <span className="text-xs font-semibold" style={{ color: PRIORITY_INFO[level].color }}>
+                                  {PRIORITY_INFO[level].label}
                                 </span>
                               );
                             })()}

@@ -33,6 +33,8 @@ import { RecurringBillItem } from '../components/bills/RecurringBillItem';
 import { BillForm } from '../components/bills/BillForm';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ListSkeleton } from '../components/PageSpinner';
+import { usePriorities } from '../priorities/usePriorities';
+import { priorityKey } from '../priorities/priorities';
 
 export function MonthlyBills() {
   const { month, year, goToPrev, goToNext, goTo } = useMonthNavigation();
@@ -66,6 +68,8 @@ export function MonthlyBills() {
   const [searchTerm, setSearchTerm] = useState('');
   const [billPendingDeletion, setBillPendingDeletion] = useState<Bill | null>(null);
   const { showToast } = useToast();
+  const priorityList = usePriorities();
+  const priorityOf = (description: string) => priorityList?.levelOf.get(priorityKey(description));
 
   const bills = useLiveQuery(
     // Pela data real de vencimento: a conta do mês que vence no dia 1 do
@@ -364,6 +368,7 @@ export function MonthlyBills() {
           <BillItem
             key={bill.id}
             bill={bill}
+            priority={priorityOf(bill.originalDescription ?? bill.description)}
             selected={selectedIds.includes(`bill-${bill.id}`)}
             selectionMode={isSelectionMode}
             onSelect={() => toggleSelected(`bill-${bill.id}`)}
@@ -382,6 +387,7 @@ export function MonthlyBills() {
           <RecurringBillItem
             key={`recurring-${r.debt.id}-${r.installmentNumber}`}
             entry={r}
+            priority={priorityOf(r.debt.description)}
             selected={selectedIds.includes(`recurring-${r.debt.id}-${r.installmentNumber}`)}
             selectionMode={isSelectionMode}
             onSelect={() => toggleSelected(`recurring-${r.debt.id}-${r.installmentNumber}`)}

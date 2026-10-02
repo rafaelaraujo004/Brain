@@ -175,6 +175,11 @@ export interface AppSettings {
   theme: 'dark' | 'light';
   defaultSalary: number;
   avatarDataUrl?: string;
+  /**
+   * Grupos de gasto escolhidos à mão na aba Gastos, por descrição de conta.
+   * Lista (e não mapa) porque o Firestore restringe chaves de mapa.
+   */
+  spendingOverrides?: Array<{ keyword: string; group: string }>;
 }
 
 export type PriorityLevel = 'alta' | 'media' | 'baixa';
@@ -183,6 +188,11 @@ export interface PriorityItem {
   id?: number;
   keyword: string;
   level: PriorityLevel;
+  /**
+   * Conta tirada da lista de prioridades pelo usuário. Volta sozinha se uma
+   * conta ou dívida com o mesmo nome for cadastrada de novo.
+   */
+  excluded?: boolean;
 }
 
 export interface MonthYear {
