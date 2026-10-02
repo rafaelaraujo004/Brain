@@ -57,7 +57,71 @@ export interface Bill {
    * É o id da primeira ocorrência da série.
    */
   seriesId?: number;
+  /**
+   * Tipo da dívida. Quando ausente, é deduzido da descrição ("Enel" vira
+   * energia, "Nubank" vira cartão). Define o risco de não pagar e os
+   * encargos padrão por atraso.
+   */
+  category?: DebtCategory;
+  /** Multa por atraso em %, cobrada uma vez. Ausente = sem multa */
+  lateFeePercent?: number;
+  /** Juros por atraso em % ao mês. Ausente = sem juros */
+  monthlyInterestPercent?: number;
+  /** Conta gerada por um empréstimo com agiota (juros do mês ou quitação) */
+  loanId?: number;
+  /** true na conta que registra a devolução do valor emprestado */
+  loanPayoff?: boolean;
 }
+
+/**
+ * Dinheiro pego com agiota (ou qualquer empréstimo informal só de juros).
+ *
+ * Todo mês, a partir do mês seguinte ao empréstimo, cobra-se o percentual
+ * sobre o valor emprestado — sem abater nada dele. A dívida só termina
+ * quando o valor cheio é devolvido.
+ */
+export interface InformalLoan {
+  id?: number;
+  /** "Agiota", ou o nome de quem emprestou */
+  lender: string;
+  /** Valor pego — e o valor que precisa ser devolvido para quitar */
+  principal: number;
+  /** Juros cobrados por mês sobre o valor pego, em % */
+  monthlyRatePercent: number;
+  /** Competência em que o dinheiro foi pego; a primeira cobrança é no mês seguinte */
+  takenMonth: number;
+  takenYear: number;
+  /** Dia do mês em que os juros vencem */
+  dueDay: number;
+  status: 'active' | 'paid';
+  /** Competência em que o valor cheio foi devolvido */
+  paidOffMonth?: number;
+  paidOffYear?: number;
+  paidOffAt?: string;
+  createdAt: string;
+}
+
+/**
+ * Tipos de dívida que o assistente sabe tratar. Cada um carrega o risco de
+ * ficar sem pagar (corte, despejo, negativação) e os encargos típicos.
+ */
+export type DebtCategory =
+  | 'moradia'
+  | 'energia'
+  | 'agua'
+  | 'gas'
+  | 'pensao'
+  | 'saude'
+  | 'financiamento'
+  | 'telecom'
+  | 'educacao'
+  | 'impostos'
+  | 'cartao'
+  | 'cheque_especial'
+  | 'emprestimo'
+  | 'assinatura'
+  | 'pessoal'
+  | 'outros';
 
 export interface RecurringDebt {
   id?: number;
@@ -70,6 +134,9 @@ export interface RecurringDebt {
   startYear: number;
   observation: string;
   isActive: boolean;
+  category?: DebtCategory;
+  lateFeePercent?: number;
+  monthlyInterestPercent?: number;
 }
 
 export interface ExtraFund {

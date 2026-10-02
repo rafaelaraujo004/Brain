@@ -10,10 +10,11 @@ export interface BackupData {
   incomeSources: unknown[];
   settings: unknown[];
   priorities?: unknown[];
+  loans?: unknown[];
 }
 
 export async function exportBackup(): Promise<string> {
-  const [bills, recurringDebts, extraFunds, monthlyConfigs, incomeSources, settings, priorities] =
+  const [bills, recurringDebts, extraFunds, monthlyConfigs, incomeSources, settings, priorities, loans] =
     await Promise.all([
       db.bills.toArray(),
       db.recurringDebts.toArray(),
@@ -22,6 +23,7 @@ export async function exportBackup(): Promise<string> {
       db.incomeSources.toArray(),
       db.settings.toArray(),
       db.priorities.toArray(),
+      db.loans.toArray(),
     ]);
 
   const backup: BackupData = {
@@ -34,6 +36,7 @@ export async function exportBackup(): Promise<string> {
     incomeSources,
     settings,
     priorities,
+    loans,
   };
 
   return JSON.stringify(backup, null, 2);
@@ -62,7 +65,7 @@ export async function importBackup(file: File): Promise<{ success: boolean; mess
     }
 
     // Clear all tables and import
-    await db.transaction('rw', [db.bills, db.recurringDebts, db.extraFunds, db.monthlyConfigs, db.incomeSources, db.settings, db.priorities], async () => {
+    await db.transaction('rw', [db.bills, db.recurringDebts, db.extraFunds, db.monthlyConfigs, db.incomeSources, db.settings, db.priorities, db.loans], async () => {
       await db.bills.clear();
       await db.recurringDebts.clear();
       await db.extraFunds.clear();
@@ -70,6 +73,7 @@ export async function importBackup(file: File): Promise<{ success: boolean; mess
       await db.incomeSources.clear();
       await db.settings.clear();
       await db.priorities.clear();
+      await db.loans.clear();
 
       if (data.bills.length > 0) await db.bills.bulkAdd(data.bills as never[]);
       if (data.recurringDebts.length > 0) await db.recurringDebts.bulkAdd(data.recurringDebts as never[]);
@@ -78,6 +82,7 @@ export async function importBackup(file: File): Promise<{ success: boolean; mess
       if (data.incomeSources?.length > 0) await db.incomeSources.bulkAdd(data.incomeSources as never[]);
       if (data.settings.length > 0) await db.settings.bulkAdd(data.settings as never[]);
       if (data.priorities?.length && data.priorities.length > 0) await db.priorities.bulkAdd(data.priorities as never[]);
+      if (data.loans?.length) await db.loans.bulkAdd(data.loans as never[]);
     });
 
     return {

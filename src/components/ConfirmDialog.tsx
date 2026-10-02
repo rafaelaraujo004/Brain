@@ -1,5 +1,6 @@
 import { AlertTriangle } from 'lucide-react';
 import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * Confirmação para ações destrutivas. Excluir uma conta apagava o registro
@@ -37,7 +38,9 @@ export function ConfirmDialog({
 
   if (!open) return null;
 
-  return (
+  // Direto no <body>: dentro de um cartão com backdrop-filter, um elemento
+  // fixed fica preso ao cartão em vez de cobrir a tela.
+  return createPortal(
     <div
       className="fixed inset-0 z-[70] flex items-end md:items-center justify-center animate-fade"
       style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)' }}
@@ -84,6 +87,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

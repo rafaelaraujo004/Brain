@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Receipt, RefreshCw, Settings, BarChart3, Brain } from 'lucide-react';
+import { LayoutDashboard, Receipt, RefreshCw, Settings, BarChart3, Brain, Layers } from 'lucide-react';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Início' },
   { to: '/contas', icon: Receipt, label: 'Contas' },
   { to: '/recorrentes', icon: RefreshCw, label: 'Dívidas' },
+  { to: '/por-conta', icon: Layers, label: 'Totais' },
   { to: '/analise', icon: BarChart3, label: 'Análise' },
   { to: '/assistente', icon: Brain, label: 'IA' },
   { to: '/config', icon: Settings, label: 'Config' },

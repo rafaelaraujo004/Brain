@@ -5,6 +5,7 @@ import {
   db,
   ensureCarryOverBillsForMonth,
   ensureMonthlyBillOccurrences,
+  ensureLoanInterestBills,
   removeCarryOverForPaidBill,
   skipBillToNextMonth,
   skipRecurringToNextMonth,
@@ -16,7 +17,7 @@ import {
 } from '../db/database';
 import { formatCurrency, getMonthName } from '../utils/formatters';
 import { AnimatedCurrency } from '../components/AnimatedCurrency';
-import { getPostponeStatus, getRecurringStatusForMonth } from '../utils/bills';
+import { getInstallmentsForMonth, getPostponeStatus, type InstallmentEntry } from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import type { Bill, RecurringDebt } from '../types';
@@ -27,17 +28,6 @@ import { RecurringBillItem } from '../components/bills/RecurringBillItem';
 import { BillForm } from '../components/bills/BillForm';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ListSkeleton } from '../components/PageSpinner';
-
-function getRecurringForMonth(debt: RecurringDebt, month: number, year: number) {
-  const recurring = getRecurringStatusForMonth(debt, month, year);
-  if (!recurring.applies) return null;
-
-  return {
-    installmentNumber: recurring.installmentNumber,
-    isPaid: recurring.status === 'paid',
-    isOverdue: recurring.status === 'overdue',
-  };
-}
 
 export function MonthlyBills() {
   const { month, year, goToPrev, goToNext } = useMonthNavigation();
@@ -58,10 +48,18 @@ export function MonthlyBills() {
     []
   );
 
+  // Contas ligadas a parcelas (do "Adiar" de parcela), de qualquer mês: na
+  // competência delas, quem representa a parcela é a conta.
+  const linkedBills = useLiveQuery(
+    () => db.bills.filter((b) => b.recurringDebtId !== undefined).toArray(),
+    []
+  );
+
   useEffect(() => {
     void (async () => {
       // Primeiro as faturas do próprio mês, depois o que ficou para trás —
       // nesta ordem a conta mensal adiada encontra a fatura nova já criada.
+      await ensureLoanInterestBills(month, year);
       await ensureMonthlyBillOccurrences(month, year);
       const carried = await ensureCarryOverBillsForMonth(month, year);
 
@@ -80,19 +78,20 @@ export function MonthlyBills() {
     setSelectedIds([]);
   }, [month, year]);
 
-  // Recurring debts that apply to this month and aren't already linked as bills
-  const recurringForMonth = useMemo(() => {
-    if (!recurringDebts || !bills) return [];
+  // Parcelas do mês. No mês vigente entram também as parcelas de meses
+  // anteriores ainda não pagas — se a aba Dívidas diz "2 atrasadas", as duas
+  // estão aqui. As que ficaram para trás vêm primeiro.
+  const recurringForMonth = useMemo((): InstallmentEntry[] => {
+    if (!recurringDebts || !bills || !linkedBills) return [];
     return recurringDebts
-      .map((debt) => {
-        const hasLinkedBill = bills.some((b) => b.recurringDebtId === debt.id);
-        if (hasLinkedBill) return null;
-        const info = getRecurringForMonth(debt, month, year);
-        if (!info) return null;
-        return { debt, ...info };
+      .flatMap((debt) => {
+        const linkedMonths = new Set(
+          linkedBills.filter((b) => b.recurringDebtId === debt.id).map((b) => `${b.year}-${b.month}`)
+        );
+        return getInstallmentsForMonth(debt, month, year, linkedMonths);
       })
-      .filter(Boolean) as { debt: RecurringDebt; installmentNumber: number; isPaid: boolean; isOverdue: boolean }[];
-  }, [recurringDebts, bills, month, year]);
+      .sort((a, b) => Number(b.isCarried) - Number(a.isCarried) || a.dueDate.getTime() - b.dueDate.getTime());
+  }, [recurringDebts, bills, linkedBills, month, year]);
 
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
@@ -113,7 +112,7 @@ export function MonthlyBills() {
     if (!normalizedSearch) return recurringForMonth;
 
     return recurringForMonth.filter((entry) =>
-      [entry.debt.description, entry.debt.observation]
+      [entry.debt.description, entry.debt.observation, entry.originLabel]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
@@ -138,6 +137,16 @@ export function MonthlyBills() {
   };
 
   const toggleRecurringPaid = async (debt: RecurringDebt, installmentNumber: number, currentlyPaid: boolean) => {
+    // As parcelas são contadas em sequência (`paidInstallments`), então só
+    // dá para pagar a mais antiga em aberto. Pular uma marcaria as anteriores
+    // como pagas sem que tenham sido.
+    if (!currentlyPaid && installmentNumber > debt.paidInstallments + 1) {
+      showToast({
+        message: `Pague primeiro a parcela ${debt.paidInstallments + 1}/${debt.totalInstallments} de ${debt.description} — as parcelas são quitadas em ordem.`,
+        tone: 'warning',
+      });
+      return;
+    }
     if (currentlyPaid) {
       // Unpay: set paidInstallments to installmentNumber - 1
       await updateRecurringDebtPaidInstallmentsWithSync(
@@ -189,7 +198,7 @@ export function MonthlyBills() {
   };
 
   // useLiveQuery devolve undefined até a primeira resposta do Dexie.
-  const isLoading = bills === undefined || recurringDebts === undefined;
+  const isLoading = bills === undefined || recurringDebts === undefined || linkedBills === undefined;
   const isSelectionMode = selectedIds.length > 0;
 
   const toggleSelected = (id: string) => {
@@ -207,7 +216,9 @@ export function MonthlyBills() {
   const totalDue = billsDue + recurringDue;
 
   const billsPaid = bills?.filter((b) => b.status === 'paid').reduce((sum, b) => sum + b.finalValue, 0) ?? 0;
-  const recurringPaid = recurringForMonth.filter((r) => r.isPaid).reduce((sum, r) => sum + r.debt.installmentValue, 0);
+  const recurringPaid = recurringForMonth
+    .filter((r) => r.status === 'paid')
+    .reduce((sum, r) => sum + r.debt.installmentValue, 0);
   const totalPaid = billsPaid + recurringPaid;
 
   const selectedTotal = useMemo(() => {
@@ -288,7 +299,7 @@ export function MonthlyBills() {
       )}
 
       {/* Bills list */}
-      <div className="grid gap-2.5 md:grid-cols-2 stagger">
+      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 stagger">
         {filteredBills.map((bill) => (
           <BillItem
             key={bill.id}
@@ -309,16 +320,13 @@ export function MonthlyBills() {
         ))}
         {filteredRecurringForMonth.map((r) => (
           <RecurringBillItem
-            key={`recurring-${r.debt.id}`}
-            debt={r.debt}
-            installmentNumber={r.installmentNumber}
-            isPaid={r.isPaid}
-            isOverdue={r.isOverdue}
+            key={`recurring-${r.debt.id}-${r.installmentNumber}`}
+            entry={r}
             selected={selectedIds.includes(`recurring-${r.debt.id}-${r.installmentNumber}`)}
             selectionMode={isSelectionMode}
             onSelect={() => toggleSelected(`recurring-${r.debt.id}-${r.installmentNumber}`)}
             onLongPress={() => toggleSelected(`recurring-${r.debt.id}-${r.installmentNumber}`)}
-            onToggle={() => toggleRecurringPaid(r.debt, r.installmentNumber, r.isPaid)}
+            onToggle={() => toggleRecurringPaid(r.debt, r.installmentNumber, r.status === 'paid')}
             onSkip={() => skipRecurring(r.debt, r.installmentNumber)}
           />
         ))}

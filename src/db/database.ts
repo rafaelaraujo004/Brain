@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem, PostponeRecord } from '../types';
+import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem, PostponeRecord, InformalLoan } from '../types';
 import { buildDueDate, getMonthName } from '../utils/formatters';
 import { collection, doc, getDoc, getDocs, limit, onSnapshot, query, setDoc, where, type Unsubscribe } from 'firebase/firestore';
 import { firestore } from './firebase';
@@ -12,6 +12,7 @@ class AppDatabase extends Dexie {
   incomeSources!: Table<IncomeSource>;
   settings!: Table<AppSettings>;
   priorities!: Table<PriorityItem>;
+  loans!: Table<InformalLoan>;
 
   constructor() {
     super('MinhasContasDB');
@@ -182,6 +183,19 @@ class AppDatabase extends Dexie {
         await billsTable.update(bill.id, { seriesId: rootId });
       }
     });
+
+    // v8: dinheiro com agiota. As cobranças mensais de juros são contas
+    // comuns ligadas ao empréstimo por loanId.
+    this.version(8).stores({
+      bills: '++id, [month+year], recurringDebtId, status, dueDay, carriedFromBillId, [originYear+originMonth], postponedAt, seriesId, isMonthly, loanId',
+      recurringDebts: '++id, isActive',
+      extraFunds: '++id, [month+year]',
+      monthlyConfigs: '++id, [month+year]',
+      incomeSources: '++id, isActive',
+      settings: '++id',
+      priorities: '++id, keyword, level',
+      loans: '++id, status',
+    });
   }
 }
 
@@ -197,6 +211,7 @@ interface CloudSnapshot {
   incomeSources: IncomeSource[];
   settings: AppSettings[];
   priorities: PriorityItem[];
+  loans?: InformalLoan[];
 }
 
 const LOCAL_LAST_CHANGE_KEY = 'paguei_local_last_change';
@@ -318,7 +333,7 @@ function getLocalLastChangedAt(): number {
 }
 
 async function buildLocalSnapshot(): Promise<CloudSnapshot> {
-  const [bills, recurringDebts, extraFunds, monthlyConfigs, incomeSources, settings, priorities] =
+  const [bills, recurringDebts, extraFunds, monthlyConfigs, incomeSources, settings, priorities, loans] =
     await Promise.all([
       db.bills.toArray(),
       db.recurringDebts.toArray(),
@@ -327,6 +342,7 @@ async function buildLocalSnapshot(): Promise<CloudSnapshot> {
       db.incomeSources.toArray(),
       db.settings.toArray(),
       db.priorities.toArray(),
+      db.loans.toArray(),
     ]);
 
   return {
@@ -339,6 +355,7 @@ async function buildLocalSnapshot(): Promise<CloudSnapshot> {
     incomeSources,
     settings,
     priorities,
+    loans,
   };
 }
 
@@ -377,7 +394,8 @@ function hasCloudData(snapshot: Partial<CloudSnapshot>): boolean {
     normalizeArray(snapshot.monthlyConfigs).length > 0 ||
     normalizeArray(snapshot.incomeSources).length > 0 ||
     normalizeArray(snapshot.settings).length > 0 ||
-    normalizeArray(snapshot.priorities).length > 0
+    normalizeArray(snapshot.priorities).length > 0 ||
+    normalizeArray(snapshot.loans).length > 0
   );
 }
 
@@ -390,6 +408,7 @@ async function getLocalItemCount(): Promise<number> {
     db.incomeSources.count(),
     db.settings.count(),
     db.priorities.count(),
+    db.loans.count(),
   ]);
 
   return counts.reduce((sum, value) => sum + value, 0);
@@ -403,12 +422,13 @@ async function applyCloudSnapshotToLocal(snapshot: Partial<CloudSnapshot>): Prom
   const incomeSources = normalizeArray<IncomeSource>(snapshot.incomeSources);
   const settings = normalizeArray<AppSettings>(snapshot.settings);
   const priorities = normalizeArray<PriorityItem>(snapshot.priorities);
+  const loans = normalizeArray<InformalLoan>(snapshot.loans);
 
   isApplyingCloudData = true;
   try {
     await db.transaction(
       'rw',
-      [db.bills, db.recurringDebts, db.extraFunds, db.monthlyConfigs, db.incomeSources, db.settings, db.priorities],
+      [db.bills, db.recurringDebts, db.extraFunds, db.monthlyConfigs, db.incomeSources, db.settings, db.priorities, db.loans],
       async () => {
         await db.bills.clear();
         await db.recurringDebts.clear();
@@ -417,6 +437,7 @@ async function applyCloudSnapshotToLocal(snapshot: Partial<CloudSnapshot>): Prom
         await db.incomeSources.clear();
         await db.settings.clear();
         await db.priorities.clear();
+        await db.loans.clear();
 
         if (bills.length > 0) await db.bills.bulkAdd(bills as never[]);
         if (recurringDebts.length > 0) await db.recurringDebts.bulkAdd(recurringDebts as never[]);
@@ -425,6 +446,7 @@ async function applyCloudSnapshotToLocal(snapshot: Partial<CloudSnapshot>): Prom
         if (incomeSources.length > 0) await db.incomeSources.bulkAdd(incomeSources as never[]);
         if (settings.length > 0) await db.settings.bulkAdd(settings as never[]);
         if (priorities.length > 0) await db.priorities.bulkAdd(priorities as never[]);
+        if (loans.length > 0) await db.loans.bulkAdd(loans as never[]);
       }
     );
   } finally {
@@ -438,7 +460,7 @@ function registerDexieSyncHooks(): void {
 
   globalState.__pagueiSyncHooksRegistered = true;
 
-  const tables = [db.bills, db.recurringDebts, db.extraFunds, db.monthlyConfigs, db.incomeSources, db.settings, db.priorities];
+  const tables = [db.bills, db.recurringDebts, db.extraFunds, db.monthlyConfigs, db.incomeSources, db.settings, db.priorities, db.loans];
 
   for (const table of tables) {
     table.hook('creating', () => {
@@ -644,7 +666,34 @@ function getPreviousMonthYear(month: number, year: number): { month: number; yea
 
 // Auto carry-over only runs when the previous month has already ended.
 // Otherwise, user must manually click "Postergar".
-export async function ensureCarryOverBillsForMonth(month: number, year: number): Promise<number> {
+/**
+ * As rotinas que geram contas (faturas do mês, carry-over, juros do
+ * agiota) leem o banco, decidem o que falta e só então gravam. Se duas
+ * rodarem ao mesmo tempo — o Início e o resumo de atrasos abrem juntos, e o
+ * StrictMode do React roda cada efeito duas vezes — as duas veem o mesmo
+ * buraco e criam a mesma conta duas vezes. Esta fila faz uma esperar a
+ * outra.
+ */
+let generationChain: Promise<unknown> = Promise.resolve();
+function exclusive<T>(task: () => Promise<T>): Promise<T> {
+  const run = generationChain.then(task, task);
+  generationChain = run.catch(() => undefined);
+  return run;
+}
+
+export function ensureCarryOverBillsForMonth(
+  month: number,
+  year: number,
+  only?: (bill: Bill) => boolean
+): Promise<number> {
+  return exclusive(() => carryOverBillsForMonth(month, year, only));
+}
+
+async function carryOverBillsForMonth(
+  month: number,
+  year: number,
+  only?: (bill: Bill) => boolean
+): Promise<number> {
   const prev = getPreviousMonthYear(month, year);
 
   const today = new Date();
@@ -659,7 +708,7 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
     db.bills
       .where('[month+year]')
       .equals([prev.month, prev.year])
-      .and((b) => b.status === 'pending')
+      .and((b) => b.status === 'pending' && (!only || only(b)))
       .toArray(),
     db.bills.where('[month+year]').equals([month, year]).toArray(),
   ]);
@@ -689,6 +738,7 @@ export async function ensureCarryOverBillsForMonth(month: number, year: number):
       // A fatura adiada continua pertencendo à mesma série mensal, mas deixa
       // de gerar novas: quem gera é a ocorrência da competência, não esta.
       isMonthly: prevBill.isMonthly,
+      ...pickCostFields(prevBill),
       seriesId: prevBill.seriesId ?? prevBill.id,
       carriedFromBillId: prevBill.id,
       carriedFromMonth: prev.month,
@@ -740,10 +790,11 @@ function competenceKey(month: number, year: number): string {
  *
  * Devolve quantas faturas foram criadas.
  */
-export async function ensureMonthlyBillOccurrences(
-  month: number,
-  year: number
-): Promise<number> {
+export function ensureMonthlyBillOccurrences(month: number, year: number): Promise<number> {
+  return exclusive(() => monthlyBillOccurrences(month, year));
+}
+
+async function monthlyBillOccurrences(month: number, year: number): Promise<number> {
   const targetKey = competenceKey(month, year);
 
   const monthlyBills = await db.bills.filter((b) => b.isMonthly === true).toArray();
@@ -808,6 +859,7 @@ export async function ensureMonthlyBillOccurrences(
       month,
       year,
       isMonthly: true,
+      ...pickCostFields(template),
       seriesId,
       originMonth: month,
       originYear: year,
@@ -856,6 +908,39 @@ function getNextMonthYear(month: number, year: number): { month: number; year: n
  * adiamento e o historico acumulado. Ao encadear adiamentos, o historico da
  * conta anterior e preservado e a nova entrada e acrescentada no fim.
  */
+/**
+ * Categoria e encargos que uma cópia da conta (adiada ou fatura do mês
+ * seguinte) precisa herdar — senão a dívida adiada perderia a multa e os
+ * juros que o usuário cadastrou e o assistente voltaria aos padrões.
+ */
+function pickCostFields(bill: Bill): Pick<Bill, 'category' | 'lateFeePercent' | 'monthlyInterestPercent' | 'loanId'> {
+  const fields: Pick<Bill, 'category' | 'lateFeePercent' | 'monthlyInterestPercent' | 'loanId'> = {};
+  // Juros de agiota adiados continuam sendo daquele empréstimo.
+  if (bill.loanId !== undefined) fields.loanId = bill.loanId;
+  if (bill.category) fields.category = bill.category;
+  if (typeof bill.lateFeePercent === 'number') fields.lateFeePercent = bill.lateFeePercent;
+  if (typeof bill.monthlyInterestPercent === 'number') fields.monthlyInterestPercent = bill.monthlyInterestPercent;
+  return fields;
+}
+
+/**
+ * Aplica categoria e encargos a todas as ocorrências de uma série, como
+ * setBillSeriesMonthly faz com a repetição: editar a energia de outubro vale
+ * também para as faturas de agosto e setembro que ainda estão em aberto.
+ */
+export async function setBillSeriesCost(
+  seriesId: number,
+  fields: Pick<Bill, 'category' | 'lateFeePercent' | 'monthlyInterestPercent'>
+): Promise<void> {
+  const siblings = await db.bills.where('seriesId').equals(seriesId).toArray();
+  const ids = siblings.map((b) => b.id).filter((id): id is number => typeof id === 'number');
+  if (ids.length === 0) return;
+
+  await db.bills.bulkUpdate(ids.map((key) => ({ key, changes: fields })));
+  markLocalChanged();
+  scheduleCloudSync();
+}
+
 function buildPostponementFields(
   source: Bill,
   target: { month: number; year: number },
@@ -937,16 +1022,44 @@ async function syncLinkedBillsWithRecurringDebt(
   }
 }
 
+/**
+ * A que parcela uma conta corresponde. Conta ligada direto à dívida responde
+ * pela competência dela. Parcela adiada vira uma conta sem o vínculo (para
+ * não esconder a parcela do mês de destino), então o vínculo é buscado na
+ * raiz da cadeia de adiamentos — sem isso, pagar a parcela adiada em Contas
+ * não baixava nada na aba Dívidas.
+ */
+async function resolveRecurringLink(
+  bill: Bill
+): Promise<{ debtId: number; month: number; year: number } | null> {
+  if (bill.recurringDebtId) {
+    return { debtId: bill.recurringDebtId, month: bill.month, year: bill.year };
+  }
+  const seen = new Set<number>();
+  let cursorId = bill.carriedFromBillId;
+  while (cursorId && !seen.has(cursorId)) {
+    seen.add(cursorId);
+    const previous: Bill | undefined = await db.bills.get(cursorId);
+    if (!previous) return null;
+    if (previous.recurringDebtId) {
+      return { debtId: previous.recurringDebtId, month: previous.month, year: previous.year };
+    }
+    cursorId = previous.carriedFromBillId;
+  }
+  return null;
+}
+
 async function syncRecurringDebtFromBillStatus(
   bill: Bill,
   nextStatus: Bill['status']
 ): Promise<void> {
-  if (!bill.recurringDebtId) return;
+  const link = await resolveRecurringLink(bill);
+  if (!link) return;
 
-  const debt = await db.recurringDebts.get(bill.recurringDebtId);
+  const debt = await db.recurringDebts.get(link.debtId);
   if (!debt || !debt.id) return;
 
-  const installmentNumber = getInstallmentNumberForDebtMonth(debt, bill.month, bill.year);
+  const installmentNumber = getInstallmentNumberForDebtMonth(debt, link.month, link.year);
   if (!installmentNumber) return;
 
   let nextPaidInstallments = debt.paidInstallments;
@@ -1025,6 +1138,7 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
     month: next.month,
     year: next.year,
     isMonthly: bill.isMonthly,
+    ...pickCostFields(bill),
     seriesId: bill.seriesId ?? bill.id,
     carriedFromBillId: bill.id,
     carriedFromMonth: bill.month,
@@ -1042,7 +1156,8 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
   //
   // Se a conta for mesmo avulsa, basta desmarcar "repete todo mês" na edição
   // que ela para de gerar novas.
-  if (!bill.isMonthly) {
+  // Juros de agiota já são gerados todo mês pelo empréstimo.
+  if (!bill.isMonthly && bill.loanId === undefined) {
     await setBillSeriesMonthly(bill.seriesId ?? bill.id, true);
   }
 }
@@ -1229,4 +1344,220 @@ export async function getMonthlyIncomeTotal(month: number, year: number): Promis
   const totalIncomeSources = incomeSources.reduce((sum, i) => sum + i.value, 0);
 
   return salary + totalExtra + totalIncomeSources;
+}
+
+/* --- Dinheiro com agiota ---------------------------------------------- */
+
+function monthIndex(month: number, year: number): number {
+  return year * 12 + (month - 1);
+}
+
+function fromMonthIndex(index: number): { month: number; year: number } {
+  return { month: (index % 12) + 1, year: Math.floor(index / 12) };
+}
+
+/** Juros cobrados por mês: o percentual sobre o valor pego. */
+export function loanMonthlyInterest(loan: Pick<InformalLoan, 'principal' | 'monthlyRatePercent'>): number {
+  return Math.round(loan.principal * loan.monthlyRatePercent) / 100;
+}
+
+/**
+ * Garante as cobranças de juros de cada empréstimo com agiota até a
+ * competência pedida: uma conta por mês, a partir do mês seguinte ao
+ * empréstimo, até o mês em que ele foi quitado.
+ *
+ * Como nas contas mensais, a identidade de cada cobrança é (empréstimo +
+ * competência de origem): os juros de setembro adiados para outubro
+ * continuam sendo os de setembro, e setembro não gera outros.
+ *
+ * Quando o empréstimo é lançado com data retroativa, os meses que já
+ * passaram ganham as cobranças deles e as que estão em aberto são trazidas
+ * mês a mês até hoje — como teria acontecido se o app tivesse sido aberto
+ * em cada mês. Só as cobranças do agiota andam; as outras contas não.
+ */
+export function ensureLoanInterestBills(month: number, year: number): Promise<number> {
+  return exclusive(() => loanInterestBills(month, year));
+}
+
+async function loanInterestBills(month: number, year: number): Promise<number> {
+  const loans = await db.loans.toArray();
+  if (loans.length === 0) return 0;
+
+  const target = monthIndex(month, year);
+  const today = new Date();
+  const current = monthIndex(today.getMonth() + 1, today.getFullYear());
+  const created: Bill[] = [];
+
+  for (const loan of loans) {
+    if (!loan.id) continue;
+    const first = monthIndex(loan.takenMonth, loan.takenYear) + 1;
+    const last =
+      loan.status === 'paid' && loan.paidOffMonth && loan.paidOffYear
+        ? Math.min(target, monthIndex(loan.paidOffMonth, loan.paidOffYear))
+        : target;
+    if (last < first) continue;
+
+    const existing = await db.bills.where('loanId').equals(loan.id).toArray();
+    const origins = new Set(
+      existing
+        .filter((b) => !b.loanPayoff)
+        .map((b) => monthIndex(b.originMonth ?? b.month, b.originYear ?? b.year))
+    );
+
+    const value = loanMonthlyInterest(loan);
+    const description = `Juros — ${loan.lender}`;
+    const principalLabel = loan.principal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    for (let index = first; index <= last; index++) {
+      if (origins.has(index)) continue;
+      const when = fromMonthIndex(index);
+      created.push({
+        description,
+        originalDescription: description,
+        initialValue: value,
+        finalValue: value,
+        status: 'pending',
+        dueDay: loan.dueDay,
+        observation: `${loan.monthlyRatePercent.toLocaleString('pt-BR')}% de ${principalLabel} — não abate o valor pego`,
+        month: when.month,
+        year: when.year,
+        originMonth: when.month,
+        originYear: when.year,
+        originalDueDate: buildDueDate(when.month, when.year, loan.dueDay).toISOString(),
+        postponeHistory: [],
+        category: 'emprestimo',
+        loanId: loan.id,
+      });
+    }
+  }
+
+  if (created.length === 0) return 0;
+  await db.bills.bulkAdd(created);
+
+  // Atraso retroativo: leva as cobranças em aberto de meses que já
+  // terminaram até o mês corrente, uma competência por vez.
+  const pastIndexes = created
+    .map((b) => monthIndex(b.month, b.year))
+    .filter((index) => index < current);
+  if (pastIndexes.length > 0) {
+    for (let index = Math.min(...pastIndexes) + 1; index <= current; index++) {
+      const when = fromMonthIndex(index);
+      await carryOverBillsForMonth(when.month, when.year, (b) => b.loanId !== undefined);
+    }
+  }
+
+  markLocalChanged();
+  scheduleCloudSync();
+  return created.length;
+}
+
+export async function addInformalLoan(
+  input: Omit<InformalLoan, 'id' | 'status' | 'createdAt' | 'paidOffMonth' | 'paidOffYear' | 'paidOffAt'>
+): Promise<number> {
+  const id = await db.loans.add({ ...input, status: 'active', createdAt: new Date().toISOString() });
+  const today = new Date();
+  await ensureLoanInterestBills(today.getMonth() + 1, today.getFullYear());
+  return id as number;
+}
+
+/**
+ * Registra a devolução do valor cheio. A partir do mês seguinte não há mais
+ * juros; a devolução entra como conta paga no mês, para que o dinheiro que
+ * saiu apareça no orçamento.
+ */
+export async function payOffInformalLoan(loanId: number): Promise<void> {
+  const loan = await db.loans.get(loanId);
+  if (!loan || loan.status === 'paid') return;
+  const today = new Date();
+  const month = today.getMonth() + 1;
+  const year = today.getFullYear();
+
+  // Os juros deste mês continuam devidos; os de depois, não.
+  await ensureLoanInterestBills(month, year);
+
+  await db.loans.update(loanId, {
+    status: 'paid',
+    paidOffMonth: month,
+    paidOffYear: year,
+    paidOffAt: today.toISOString(),
+  });
+
+  const description = `Devolução — ${loan.lender}`;
+  await db.bills.add({
+    description,
+    originalDescription: description,
+    initialValue: loan.principal,
+    finalValue: loan.principal,
+    status: 'paid',
+    dueDay: today.getDate(),
+    observation: 'Valor pego devolvido por inteiro — empréstimo quitado',
+    month,
+    year,
+    originMonth: month,
+    originYear: year,
+    originalDueDate: buildDueDate(month, year, today.getDate()).toISOString(),
+    postponeHistory: [],
+    category: 'emprestimo',
+    loanId,
+    loanPayoff: true,
+  });
+
+  // Cobranças já geradas para meses depois da quitação deixam de existir.
+  const all = await db.bills.where('loanId').equals(loanId).toArray();
+  const stale = all
+    .filter((b) => !b.loanPayoff && b.status === 'pending')
+    .filter((b) => monthIndex(b.originMonth ?? b.month, b.originYear ?? b.year) > monthIndex(month, year))
+    .map((b) => b.id as number);
+  if (stale.length > 0) await db.bills.bulkDelete(stale);
+
+  markLocalChanged();
+  scheduleCloudSync();
+}
+
+/** Desfaz a quitação: o empréstimo volta a cobrar juros. */
+export async function reopenInformalLoan(loanId: number): Promise<void> {
+  const payoffs = await db.bills
+    .where('loanId')
+    .equals(loanId)
+    .and((b) => b.loanPayoff === true)
+    .toArray();
+  await db.bills.bulkDelete(payoffs.map((b) => b.id as number));
+  await db.loans.update(loanId, {
+    status: 'active',
+    paidOffMonth: undefined,
+    paidOffYear: undefined,
+    paidOffAt: undefined,
+  });
+  const today = new Date();
+  await ensureLoanInterestBills(today.getMonth() + 1, today.getFullYear());
+  markLocalChanged();
+  scheduleCloudSync();
+}
+
+/** Muda o percentual. Vale também para as cobranças ainda não pagas. */
+export async function updateInformalLoanRate(loanId: number, monthlyRatePercent: number): Promise<void> {
+  const loan = await db.loans.get(loanId);
+  if (!loan) return;
+  await db.loans.update(loanId, { monthlyRatePercent });
+  const value = loanMonthlyInterest({ principal: loan.principal, monthlyRatePercent });
+  const pending = await db.bills
+    .where('loanId')
+    .equals(loanId)
+    .and((b) => b.status === 'pending' && !b.loanPayoff)
+    .toArray();
+  if (pending.length > 0) {
+    await db.bills.bulkUpdate(
+      pending.map((b) => ({ key: b.id as number, changes: { initialValue: value, finalValue: value } }))
+    );
+  }
+  markLocalChanged();
+  scheduleCloudSync();
+}
+
+/** Apaga o empréstimo e todas as contas que ele gerou. */
+export async function deleteInformalLoan(loanId: number): Promise<void> {
+  const bills = await db.bills.where('loanId').equals(loanId).toArray();
+  await db.bills.bulkDelete(bills.map((b) => b.id as number));
+  await db.loans.delete(loanId);
+  markLocalChanged();
+  scheduleCloudSync();
 }

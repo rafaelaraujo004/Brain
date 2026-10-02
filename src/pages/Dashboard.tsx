@@ -1,14 +1,17 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { TrendingUp, TrendingDown, Wallet, DollarSign, RefreshCw } from 'lucide-react';
+import { TrendingUp, TrendingDown, Wallet, DollarSign, RefreshCw, Layers, ChevronRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useFinancialSnapshot } from '../advisor/useFinancialSnapshot';
 import {
   db,
   getOrCreateSettings,
   ensureCarryOverBillsForMonth,
   ensureMonthlyBillOccurrences,
+  ensureLoanInterestBills,
   ensureMonthlyConfig,
 } from '../db/database';
 import { formatCurrency, formatDate } from '../utils/formatters';
-import { getPostponeStatus, getRecurringStatusForMonth } from '../utils/bills';
+import { getInstallmentsForMonth, getPostponeStatus } from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import { useEffect, useState, useMemo } from 'react';
@@ -35,6 +38,7 @@ interface UnifiedItem {
 export function Dashboard() {
   const { month, year, goToPrev, goToNext } = useMonthNavigation();
   const [salary, setSalary] = useState(0);
+  const snapshot = useFinancialSnapshot();
 
   const bills = useLiveQuery(
     () => db.bills.where({ month, year }).toArray(),
@@ -43,6 +47,12 @@ export function Dashboard() {
 
   const recurringDebts = useLiveQuery(
     () => db.recurringDebts.filter((d) => d.isActive).toArray(),
+    []
+  );
+
+  // Contas ligadas a parcelas, de qualquer mês — mesma regra da aba Contas.
+  const linkedBills = useLiveQuery(
+    () => db.bills.filter((b) => b.recurringDebtId !== undefined).toArray(),
     []
   );
 
@@ -60,6 +70,7 @@ export function Dashboard() {
     (async () => {
       // Mesma ordem da tela de Contas, senão os totais das duas divergem:
       // primeiro as faturas do próprio mês, depois o que ficou para trás.
+      await ensureLoanInterestBills(month, year);
       await ensureMonthlyBillOccurrences(month, year);
       await ensureCarryOverBillsForMonth(month, year);
       const settings = await getOrCreateSettings();
@@ -92,31 +103,30 @@ export function Dashboard() {
       });
     });
 
-    // Recurring debts that apply to this month
+    // Parcelas do mês — no mês vigente, também as de meses anteriores que
+    // ainda não foram pagas (mesma regra da aba Contas).
     recurringDebts?.forEach((d) => {
-      const recurring = getRecurringStatusForMonth(d, month, year);
-      if (!recurring.applies) return;
-
-      // Skip if there's already a bill linked to this recurring debt
-      const hasLinkedBill = bills?.some((b) => b.recurringDebtId === d.id);
-      if (hasLinkedBill) return;
-
-      items.push({
-        id: `recurring-${d.id}`,
-        description: d.description,
-        value: d.installmentValue,
-        dueDay: d.dueDay,
-        dueDate: recurring.dueDate,
-        status: recurring.status,
-        type: 'recurring',
-        installmentInfo: `${recurring.installmentNumber}/${d.totalInstallments}`,
-        postponedTimes: 0,
-        overdueLabel: recurring.overdueLabel,
-      });
+      const linkedMonths = new Set(
+        (linkedBills ?? []).filter((b) => b.recurringDebtId === d.id).map((b) => `${b.year}-${b.month}`)
+      );
+      for (const entry of getInstallmentsForMonth(d, month, year, linkedMonths)) {
+        items.push({
+          id: `recurring-${d.id}-${entry.installmentNumber}`,
+          description: d.description,
+          value: d.installmentValue,
+          dueDay: d.dueDay,
+          dueDate: entry.dueDate,
+          status: entry.status,
+          type: 'recurring',
+          installmentInfo: `${entry.installmentNumber}/${d.totalInstallments}`,
+          postponedTimes: 0,
+          overdueLabel: entry.overdueLabel,
+        });
+      }
     });
 
     return items;
-  }, [bills, recurringDebts, month, year]);
+  }, [bills, recurringDebts, linkedBills, month, year]);
 
   const totalDue = allItems.reduce((sum, i) => sum + i.value, 0);
   const totalPaid = allItems.filter((i) => i.status === 'paid').reduce((sum, i) => sum + i.value, 0);
@@ -172,6 +182,34 @@ export function Dashboard() {
         month={month}
         year={year}
       />
+
+      {/* --- Atrasos de todos os meses ------------------------------------ */}
+      {snapshot && snapshot.totals.count > 0 && (
+        <Link
+          to="/por-conta"
+          className="card card-interactive flex items-center gap-3 animate-rise"
+          style={{ animationDelay: '40ms', borderColor: 'color-mix(in srgb, var(--color-danger) 35%, transparent)' }}
+        >
+          <span
+            className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
+            style={{ background: 'var(--color-danger-soft)', color: 'var(--color-danger)' }}
+          >
+            <Layers size={18} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold">
+              {snapshot.totals.count} {snapshot.totals.count === 1 ? 'dívida em atraso' : 'dívidas em atraso'}
+            </p>
+            <p className="text-[11px] text-[var(--color-text-secondary)] truncate">
+              Somando todos os meses · ver total por conta
+            </p>
+          </div>
+          <span className="money-lg text-[15px] text-[var(--color-danger)] flex-shrink-0">
+            {formatCurrency(snapshot.totals.updatedAmount)}
+          </span>
+          <ChevronRight size={16} className="text-[var(--color-text-tertiary)] flex-shrink-0" />
+        </Link>
+      )}
 
       {/* --- Progresso do mês --------------------------------------------- */}
       <section className="card animate-rise" style={{ animationDelay: '60ms' }}>

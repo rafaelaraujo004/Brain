@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Trash2, Edit3, Calendar, Minus, Plus } from 'lucide-react';
-import { formatCurrency, getMonthName, calculateEndDate } from '../../utils/formatters';
+import { formatCurrency, formatDate, getMonthName, calculateEndDate } from '../../utils/formatters';
+import { getRecurringBacklog } from '../../utils/bills';
 import type { RecurringDebt } from '../../types';
 
 /**
@@ -33,12 +34,10 @@ export function DebtCard({
   const remainingValue = totalValue - paidValue;
   const endDate = calculateEndDate(debt.startMonth, debt.startYear, debt.totalInstallments);
 
-  const today = new Date();
-  const monthsSinceStart =
-    (today.getFullYear() - debt.startYear) * 12 + (today.getMonth() + 1 - debt.startMonth);
-  const expectedPaid = Math.min(monthsSinceStart + 1, debt.totalInstallments);
-  const overdue =
-    debt.isActive && debt.paidInstallments < expectedPaid ? expectedPaid - debt.paidInstallments : 0;
+  // Mesma regra da aba Contas: atrasada é a parcela cujo vencimento já
+  // passou. A do mês que ainda não venceu não entra na conta.
+  const backlog = getRecurringBacklog(debt);
+  const overdue = debt.isActive ? backlog.overdueCount : 0;
 
   const accent = !debt.isActive
     ? 'var(--color-success)'
@@ -142,6 +141,30 @@ export function DebtCard({
               value={`${getMonthName(endDate.month).slice(0, 3)}/${endDate.year}`}
             />
           </div>
+
+          {overdue > 0 && (
+            <div className="rounded-2xl p-3 space-y-1.5" style={{ background: 'var(--color-danger-soft)' }}>
+              <p className="label-caps !text-[var(--color-danger)]">
+                Atrasadas · {formatCurrency(backlog.overdueAmount)}
+              </p>
+              {backlog.overdue.map((entry) => (
+                <p key={entry.installmentNumber} className="text-xs text-[var(--color-text-secondary)] tnum">
+                  Parcela {entry.installmentNumber}/{debt.totalInstallments} ·{' '}
+                  <span className="font-semibold text-[var(--color-text)]">{entry.originLabel}</span> · venceu{' '}
+                  {formatDate(entry.dueDate)} ({entry.overdueLabel})
+                </p>
+              ))}
+              <p className="text-[11px] text-[var(--color-text-tertiary)] pt-0.5">
+                Elas aparecem no mês atual em Contas até serem pagas.
+              </p>
+            </div>
+          )}
+          {backlog.dueThisMonth && (
+            <p className="text-xs text-[var(--color-text-secondary)] tnum">
+              Parcela {backlog.dueThisMonth.installmentNumber}/{debt.totalInstallments} vence em{' '}
+              <span className="font-semibold text-[var(--color-text)]">{formatDate(backlog.dueThisMonth.dueDate)}</span>.
+            </p>
+          )}
 
           {debt.observation && (
             <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">

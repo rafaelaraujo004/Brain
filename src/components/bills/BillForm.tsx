@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { X, Check } from 'lucide-react';
-import { db, setBillSeriesMonthly, updateBillStatusWithSync } from '../../db/database';
+import { db, setBillSeriesCost, setBillSeriesMonthly, updateBillStatusWithSync } from '../../db/database';
 import { buildDueDate } from '../../utils/formatters';
-import type { Bill } from '../../types';
+import type { Bill, DebtCategory } from '../../types';
+import { ChargesFields, parsePercent } from '../ChargesFields';
 
 /** Formulário de criação e edição de conta. */
 export function BillForm({
@@ -23,6 +24,9 @@ export function BillForm({
   const [observation, setObservation] = useState(bill?.observation ?? '');
   const [status, setStatus] = useState<'pending' | 'paid' | 'skipped'>(bill?.status ?? 'pending');
   const [isMonthly, setIsMonthly] = useState(bill?.isMonthly ?? false);
+  const [category, setCategory] = useState<DebtCategory | ''>(bill?.category ?? '');
+  const [lateFee, setLateFee] = useState(bill?.lateFeePercent?.toString().replace('.', ',') ?? '');
+  const [interest, setInterest] = useState(bill?.monthlyInterestPercent?.toString().replace('.', ',') ?? '');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,6 +44,11 @@ export function BillForm({
       month,
       year,
       recurringDebtId: bill?.recurringDebtId,
+      // Vazio = automático: o tipo é deduzido da descrição e os encargos vêm
+      // do tipo. `undefined` faz o Dexie apagar o campo na edição.
+      category: category || undefined,
+      lateFeePercent: parsePercent(lateFee),
+      monthlyInterestPercent: parsePercent(interest),
     };
 
     if (bill?.id) {
@@ -48,6 +57,18 @@ export function BillForm({
       // A marcação vale para a série inteira, não só para esta competência.
       if (isMonthly !== (bill.isMonthly ?? false)) {
         await setBillSeriesMonthly(bill.seriesId ?? bill.id, isMonthly);
+      }
+      // Tipo e encargos também: as faturas adiadas da mesma conta acompanham.
+      const costChanged =
+        data.category !== bill.category ||
+        data.lateFeePercent !== bill.lateFeePercent ||
+        data.monthlyInterestPercent !== bill.monthlyInterestPercent;
+      if (costChanged && bill.seriesId) {
+        await setBillSeriesCost(bill.seriesId, {
+          category: data.category,
+          lateFeePercent: data.lateFeePercent,
+          monthlyInterestPercent: data.monthlyInterestPercent,
+        });
       }
     } else {
       const day = parseInt(dueDay) || 1;
@@ -187,6 +208,16 @@ export function BillForm({
               </span>
             </span>
           </button>
+
+          <ChargesFields
+            description={description}
+            category={category}
+            lateFee={lateFee}
+            interest={interest}
+            onCategory={setCategory}
+            onLateFee={setLateFee}
+            onInterest={setInterest}
+          />
 
           <button type="submit" className="btn-primary w-full">
             {bill ? 'Salvar' : 'Adicionar'}

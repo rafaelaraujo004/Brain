@@ -231,3 +231,108 @@ export function formatPostponeTimeline(status: PostponeStatus): string[] {
     return `${index + 1}. ${from} → ${to} · adiada em ${when} · venc. ${formatDate(entry.dueDate)} · ${how}`;
   });
 }
+
+/**
+ * Uma parcela de dívida parcelada vista a partir de uma competência.
+ * `isCarried` = parcela de um mês anterior que ainda não foi paga e por isso
+ * aparece no mês vigente, como acontece com as contas adiadas.
+ */
+export interface InstallmentEntry {
+  debt: RecurringDebt;
+  installmentNumber: number;
+  /** Competência a que a parcela pertence */
+  month: number;
+  year: number;
+  dueDate: Date;
+  status: 'paid' | 'pending' | 'overdue';
+  daysLate: number;
+  overdueLabel: string;
+  isCarried: boolean;
+  originLabel: string;
+}
+
+function installmentMonth(debt: RecurringDebt, installmentNumber: number): { month: number; year: number } {
+  const index = debt.startYear * 12 + (debt.startMonth - 1) + installmentNumber - 1;
+  return { month: (index % 12) + 1, year: Math.floor(index / 12) };
+}
+
+function buildInstallmentEntry(
+  debt: RecurringDebt,
+  installmentNumber: number,
+  isCarried: boolean,
+  today: Date
+): InstallmentEntry {
+  const { month, year } = installmentMonth(debt, installmentNumber);
+  const dueDate = buildDueDate(month, year, debt.dueDay);
+  const isPaid = debt.paidInstallments >= installmentNumber;
+  const daysLate = isPaid ? 0 : daysOverdue(dueDate, today);
+  return {
+    debt,
+    installmentNumber,
+    month,
+    year,
+    dueDate,
+    status: isPaid ? 'paid' : daysLate > 0 ? 'overdue' : 'pending',
+    daysLate,
+    overdueLabel: formatOverdueSpan(daysLate),
+    isCarried,
+    originLabel: `${getMonthName(month)}/${year}`,
+  };
+}
+
+/**
+ * Parcelas que uma competência deve mostrar para uma dívida parcelada.
+ *
+ * É a regra que faz Contas e Dívidas contarem a mesma história. Se a aba
+ * Dívidas diz "2 atrasadas", o mês vigente em Contas mostra as duas: a
+ * parcela do próprio mês e a do mês anterior que ficou para trás — do mesmo
+ * jeito que uma conta adiada aparece no mês de destino.
+ *
+ * Meses anteriores e futuros continuam mostrando só a parcela deles.
+ *
+ * `linkedMonths` são as competências ("2026-9") em que a parcela já virou
+ * uma conta (pelo "Adiar" antigo); nelas quem representa a parcela é a conta.
+ */
+export function getInstallmentsForMonth(
+  debt: RecurringDebt,
+  month: number,
+  year: number,
+  linkedMonths: Set<string> = new Set(),
+  today: Date = startOfToday()
+): InstallmentEntry[] {
+  const entries: InstallmentEntry[] = [];
+  const target = (year - debt.startYear) * 12 + (month - debt.startMonth) + 1;
+  const isCurrent = today.getFullYear() === year && today.getMonth() + 1 === month;
+
+  if (isCurrent) {
+    const lastPast = Math.min(target - 1, debt.totalInstallments);
+    for (let n = debt.paidInstallments + 1; n <= lastPast; n++) {
+      const when = installmentMonth(debt, n);
+      if (linkedMonths.has(`${when.year}-${when.month}`)) continue;
+      entries.push(buildInstallmentEntry(debt, n, true, today));
+    }
+  }
+
+  if (target >= 1 && target <= debt.totalInstallments && !linkedMonths.has(`${year}-${month}`)) {
+    entries.push(buildInstallmentEntry(debt, target, false, today));
+  }
+  return entries;
+}
+
+/**
+ * Situação de uma dívida parcelada hoje: quantas parcelas já venceram sem
+ * pagamento e se a do mês ainda está para vencer. Usa o vencimento real, não
+ * só o mês — a parcela do dia 20 não está atrasada no dia 2.
+ */
+export function getRecurringBacklog(debt: RecurringDebt, today: Date = startOfToday()) {
+  const entries = getInstallmentsForMonth(debt, today.getMonth() + 1, today.getFullYear(), new Set(), today)
+    .filter((e) => e.status !== 'paid');
+  const overdue = entries.filter((e) => e.status === 'overdue');
+  return {
+    overdue,
+    overdueCount: overdue.length,
+    overdueAmount: overdue.length * debt.installmentValue,
+    dueThisMonth: entries.find((e) => e.status === 'pending'),
+    oldest: overdue[0],
+  };
+}

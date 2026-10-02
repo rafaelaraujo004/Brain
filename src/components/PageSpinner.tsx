@@ -26,7 +26,7 @@ export function PageSpinner({ label }: { label?: string }) {
  */
 export function ListSkeleton({ rows = 3 }: { rows?: number }) {
   return (
-    <div className="grid gap-2.5 md:grid-cols-2" aria-hidden="true">
+    <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2" aria-hidden="true">
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} className="card !p-3.5 flex items-center gap-3">
           <div className="skeleton w-11 h-11 rounded-2xl flex-shrink-0" />

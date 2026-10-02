@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   Brain,
@@ -13,7 +14,12 @@ import {
   ChevronUp,
   Settings2,
   RefreshCw,
+  MessageCircle,
+  ListChecks,
 } from 'lucide-react';
+import { useFinancialSnapshot } from '../advisor/useFinancialSnapshot';
+import { AskPanel } from '../components/advisor/AskPanel';
+import { ListSkeleton } from '../components/PageSpinner';
 import { db, getOrCreateSettings } from '../db/database';
 import { formatCurrency, getMonthName, startOfToday } from '../utils/formatters';
 import { getPostponeStatus, getRecurringStatusForMonth } from '../utils/bills';
@@ -107,7 +113,26 @@ function getRecurringForCurrentMonth(debt: RecurringDebt, month: number, year: n
   };
 }
 
+interface AdvisorNavState {
+  ask?: string;
+  scopeIds?: string[];
+}
+
 export function FinancialAdvisor() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const navState = (location.state ?? null) as AdvisorNavState | null;
+  const [tab, setTab] = useState<'perguntar' | 'plano'>('perguntar');
+  // Lidos uma vez: a pergunta vinda de "Dívidas por conta" não pode ser
+  // reenviada ao recarregar a página.
+  const [initialAsk] = useState(navState?.ask);
+  const [scopeIds, setScopeIds] = useState<string[]>(navState?.scopeIds ?? []);
+  const snapshot = useFinancialSnapshot();
+
+  useEffect(() => {
+    if (navState) navigate(location.pathname, { replace: true, state: null });
+  }, [navState, navigate, location.pathname]);
+
   const today = new Date();
   const { month, year, goToPrev, goToNext } = useMonthNavigation();
   const currentMonth = today.getMonth() + 1;
@@ -604,14 +629,15 @@ export function FinancialAdvisor() {
           <div>
             <h1 className="text-xl font-extrabold tracking-tight">Assistente</h1>
             <p className="text-xs text-[var(--color-text-tertiary)]">
-              O que fazer com o dinheiro deste mês
+              Analisa suas dívidas no próprio aparelho
             </p>
           </div>
         </div>
         <HelpButton
           title="Como usar o Assistente"
           items={[
-            { icon: '🧠', title: 'Plano objetivo', description: 'Veja 3 passos claros para agir no mês selecionado.' },
+            { icon: '💬', title: 'Perguntar', description: 'Escreva ou fale sua dúvida: "vale pegar 5 mil em 12x de 500?", "quais dívidas pagar primeiro?", "em quanto tempo saio das dívidas?". As contas são feitas com os seus dados, sem internet.' },
+            { icon: '🧠', title: 'Plano do mês', description: 'Veja 3 passos claros para agir no mês selecionado.' },
             { icon: '⚠️', title: 'Alertas', description: 'Contas vencendo em breve ou atrasadas aparecem destacadas em vermelho.' },
             { icon: '💡', title: 'Sugestões', description: 'Mostra primeiro o que tem maior impacto, com opção de ver mais.' },
             { icon: '🧮', title: 'Simulador', description: 'Informe um valor e veja quais contas cabem nesse orçamento.' },
@@ -620,6 +646,41 @@ export function FinancialAdvisor() {
         />
       </header>
 
+      <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+        {([
+          ['perguntar', 'Perguntar', MessageCircle],
+          ['plano', 'Plano do mês', ListChecks],
+        ] as const).map(([key, label, Icon]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className="py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all duration-200"
+            style={{
+              background: tab === key ? 'var(--color-surface)' : 'transparent',
+              color: tab === key ? 'var(--color-text)' : 'var(--color-text-tertiary)',
+              boxShadow: tab === key ? 'var(--shadow-md)' : 'none',
+            }}
+          >
+            <Icon size={16} />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'perguntar' &&
+        (snapshot ? (
+          <AskPanel
+            snapshot={snapshot}
+            scopeIds={scopeIds}
+            initialQuestion={initialAsk}
+            onClearScope={() => setScopeIds([])}
+          />
+        ) : (
+          <ListSkeleton />
+        ))}
+
+      {tab === 'plano' && (
+      <>
       <div className="flex justify-center">
         <MonthSelector month={month} year={year} onPrev={goToPrev} onNext={goToNext} />
       </div>
@@ -958,6 +1019,8 @@ export function FinancialAdvisor() {
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

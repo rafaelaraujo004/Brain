@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import { db, updateRecurringDebtPaidInstallmentsWithSync } from '../../db/database';
 import { getMonthName } from '../../utils/formatters';
-import type { RecurringDebt } from '../../types';
+import type { DebtCategory, RecurringDebt } from '../../types';
+import { ChargesFields, parsePercent } from '../ChargesFields';
 
 /** Formulário de criação e edição de dívida parcelada. */
 export function DebtForm({
@@ -21,6 +22,9 @@ export function DebtForm({
   const [startMonth, setStartMonth] = useState(debt?.startMonth?.toString() ?? (now.getMonth() + 1).toString());
   const [startYear, setStartYear] = useState(debt?.startYear?.toString() ?? now.getFullYear().toString());
   const [observation, setObservation] = useState(debt?.observation ?? '');
+  const [category, setCategory] = useState<DebtCategory | ''>(debt?.category ?? '');
+  const [lateFee, setLateFee] = useState(debt?.lateFeePercent?.toString().replace('.', ',') ?? '');
+  const [interest, setInterest] = useState(debt?.monthlyInterestPercent?.toString().replace('.', ',') ?? '');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,6 +42,9 @@ export function DebtForm({
       startYear: parseInt(startYear) || now.getFullYear(),
       observation: observation.trim(),
       isActive: paid < total,
+      category: category || undefined,
+      lateFeePercent: parsePercent(lateFee),
+      monthlyInterestPercent: parsePercent(interest),
     };
 
     if (debt?.id) {
@@ -167,6 +174,16 @@ export function DebtForm({
             value={observation}
             onChange={(e) => setObservation(e.target.value)}
             className="input-field"
+          />
+
+          <ChargesFields
+            description={description}
+            category={category}
+            lateFee={lateFee}
+            interest={interest}
+            onCategory={setCategory}
+            onLateFee={setLateFee}
+            onInterest={setInterest}
           />
 
           <button type="submit" className="btn-primary w-full">

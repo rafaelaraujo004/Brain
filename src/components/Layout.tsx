@@ -13,7 +13,7 @@ export function Layout() {
       {/* Conteúdo. A `key` na rota faz o React remontar a área a cada
           navegação, o que reinicia as animações de entrada e dá a sensação
           de troca de tela em vez de substituição de conteúdo. */}
-      <main className="flex-1 min-w-0 pb-24 md:pb-8 px-4 pt-3 md:px-8 md:pt-6 md:ml-64">
+      <main className="flex-1 min-w-0 overflow-x-clip pb-24 md:pb-8 px-4 pt-3 md:px-8 md:pt-6 md:ml-64">
         <div key={location.pathname} className="max-w-3xl mx-auto w-full animate-fade">
           <Outlet />
         </div>

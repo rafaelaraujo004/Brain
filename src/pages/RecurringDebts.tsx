@@ -97,7 +97,7 @@ export function RecurringDebts() {
       {activeDebts.length > 0 && (
         <section className="space-y-2.5">
           <SectionTitle label="Ativas" count={activeDebts.length} tone="var(--color-primary)" />
-          <div className="grid gap-2.5 md:grid-cols-2 stagger">
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 stagger">
           {activeDebts.map((debt) => (
             <DebtCard
               key={debt.id}
@@ -122,7 +122,7 @@ export function RecurringDebts() {
             count={completedDebts.length}
             tone="var(--color-success)"
           />
-          <div className="grid gap-2.5 md:grid-cols-2 stagger">
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 stagger">
           {completedDebts.map((debt) => (
             <DebtCard
               key={debt.id}

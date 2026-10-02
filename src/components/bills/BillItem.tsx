@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
-import { Check, Trash2, Edit3, ArrowRight, Undo, Clock, Repeat } from 'lucide-react';
+import { Check, Trash2, Edit3, ArrowRight, Undo, Repeat } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../utils/formatters';
-import { formatPostponeSummary, formatPostponeTimeline, getPostponeStatus } from '../../utils/bills';
+import { getPostponeStatus } from '../../utils/bills';
+import { PostponeTimeline } from './PostponeTimeline';
 import type { Bill } from '../../types';
 
 /**
@@ -46,11 +47,6 @@ export function BillItem({
   // cadeia no banco a cada render.
   const postpone = useMemo(() => getPostponeStatus(bill), [bill]);
   const isCarried = postpone.isCarried;
-  const postponeSummary = formatPostponeSummary(postpone);
-  const timeline = useMemo(
-    () => (showActions ? formatPostponeTimeline(postpone) : []),
-    [showActions, postpone]
-  );
 
   const startLongPress = () => {
     if (longPressTimeoutRef.current) window.clearTimeout(longPressTimeoutRef.current);
@@ -165,12 +161,6 @@ export function BillItem({
               {bill.observation}
             </p>
           )}
-          {postponeSummary && (
-            <p className="text-[11px] text-[var(--color-warning)] mt-0.5 truncate flex items-center gap-1">
-              <Clock size={10} className="flex-shrink-0" />
-              {postponeSummary}
-            </p>
-          )}
         </div>
 
         <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
@@ -198,10 +188,13 @@ export function BillItem({
       {/* --- Painel de ações e histórico --------------------------------- */}
       {showActions && !selectionMode && (
         <div
-          className="mt-3.5 pt-3.5 border-t border-[var(--color-border)] animate-rise"
+          className="mt-3.5 pt-0.5 border-t border-[var(--color-border)] animate-rise"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex flex-wrap gap-2">
+          {/* Primeiro a história da conta, depois o que fazer com ela. */}
+          <PostponeTimeline bill={bill} status={postpone} />
+
+          <div className="flex flex-wrap gap-2 mt-3">
             <ActionButton onClick={onEdit} icon={<Edit3 size={14} />} label="Editar" />
             {!isPaid && !isSkipped && isCarried && (
               <ActionButton
@@ -228,32 +221,6 @@ export function BillItem({
               tone="var(--color-danger)"
             />
           </div>
-
-          {timeline.length > 0 && (
-            <div className="mt-3.5 rounded-2xl p-3 bg-[var(--color-surface-2)] space-y-1.5">
-              <p className="label-caps">Histórico de adiamentos</p>
-              {timeline.map((line) => (
-                <p
-                  key={line}
-                  className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed tnum"
-                >
-                  {line}
-                </p>
-              ))}
-              <p className="text-[11px] pt-1.5 border-t border-[var(--color-border)] text-[var(--color-text-secondary)]">
-                Vencimento original:{' '}
-                <span className="font-bold text-[var(--color-text)] tnum">
-                  {formatDate(postpone.originalDueDate)}
-                </span>
-                {postpone.daysLate > 0 && (
-                  <span className="text-[var(--color-danger)] font-bold">
-                    {' '}
-                    — vencida {postpone.overdueLabel}
-                  </span>
-                )}
-              </p>
-            </div>
-          )}
         </div>
       )}
     </div>

@@ -25,6 +25,9 @@ const MonthlyAnalysis = lazy(() =>
 const SettingsPage = lazy(() =>
   import('./pages/Settings').then((m) => ({ default: m.SettingsPage }))
 );
+const DebtsByAccount = lazy(() =>
+  import('./pages/DebtsByAccount').then((m) => ({ default: m.DebtsByAccount }))
+);
 const FinancialAdvisor = lazy(() =>
   import('./pages/FinancialAdvisor').then((m) => ({ default: m.FinancialAdvisor }))
 );
@@ -62,6 +65,14 @@ export default function App() {
                 element={
                   <Suspense fallback={<PageSpinner />}>
                     <RecurringDebts />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/por-conta"
+                element={
+                  <Suspense fallback={<PageSpinner />}>
+                    <DebtsByAccount />
                   </Suspense>
                 }
               />

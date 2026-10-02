@@ -1,14 +1,17 @@
 import { useRef, useState } from 'react';
 import { Check, RefreshCw, ArrowRight } from 'lucide-react';
-import { formatCurrency } from '../../utils/formatters';
-import type { RecurringDebt } from '../../types';
+import { formatCurrency, formatDate } from '../../utils/formatters';
+import type { InstallmentEntry } from '../../utils/bills';
 
-/** Cartão de uma parcela de dívida recorrente que ainda não virou conta. */
+/**
+ * Cartão de uma parcela de dívida parcelada que ainda não virou conta.
+ *
+ * Parcelas de meses anteriores que não foram pagas aparecem no mês vigente
+ * com a origem ("← Setembro/2026"), como as contas adiadas — é assim que o
+ * número de atrasadas da aba Dívidas bate com o que se vê aqui.
+ */
 export function RecurringBillItem({
-  debt,
-  installmentNumber,
-  isPaid,
-  isOverdue,
+  entry,
   selected,
   selectionMode,
   onSelect,
@@ -16,10 +19,7 @@ export function RecurringBillItem({
   onToggle,
   onSkip,
 }: {
-  debt: RecurringDebt;
-  installmentNumber: number;
-  isPaid: boolean;
-  isOverdue: boolean;
+  entry: InstallmentEntry;
   selected: boolean;
   selectionMode: boolean;
   onSelect: () => void;
@@ -27,6 +27,9 @@ export function RecurringBillItem({
   onToggle: () => void;
   onSkip: () => void;
 }) {
+  const { debt, installmentNumber, isCarried } = entry;
+  const isPaid = entry.status === 'paid';
+  const isOverdue = entry.status === 'overdue';
   const [showActions, setShowActions] = useState(false);
   const longPressTimeoutRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
@@ -99,13 +102,23 @@ export function RecurringBillItem({
               {debt.description}
             </p>
           </div>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-x-2 gap-y-0.5 mt-1 flex-wrap">
             <span className="text-[11px] text-[var(--color-text-tertiary)] tnum">
-              Dia {debt.dueDay}
+              {formatDate(entry.dueDate)}
             </span>
             <span className="text-[11px] font-semibold text-[var(--color-primary)] tnum">
-              {installmentNumber}/{debt.totalInstallments}
+              Parcela {installmentNumber}/{debt.totalInstallments}
             </span>
+            {isCarried && (
+              <span className="text-[11px] font-semibold text-[var(--color-warning)]">
+                ← {entry.originLabel}
+              </span>
+            )}
+            {isOverdue && entry.overdueLabel && (
+              <span className="text-[11px] font-bold text-[var(--color-danger)]">
+                vencida {entry.overdueLabel}
+              </span>
+            )}
           </div>
           {/* Trilho de parcelas: mostra o quanto da dívida já foi andado sem
               ocupar mais uma linha de texto. */}
@@ -139,6 +152,8 @@ export function RecurringBillItem({
             </span>
           ) : isPaid ? (
             <span className="badge-paid">Pago</span>
+          ) : isCarried ? (
+            <span className="badge-overdue">Atrasada</span>
           ) : isOverdue ? (
             <span className="badge-overdue">Vencida</span>
           ) : (
@@ -149,9 +164,25 @@ export function RecurringBillItem({
 
       {showActions && !selectionMode && !isPaid && (
         <div
-          className="mt-3.5 pt-3.5 border-t border-[var(--color-border)] animate-rise"
+          className="mt-3.5 pt-3.5 border-t border-[var(--color-border)] animate-rise space-y-3"
           onClick={(e) => e.stopPropagation()}
         >
+          <div className="rounded-2xl p-3 bg-[var(--color-surface-2)] text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
+            {isCarried ? (
+              <>
+                Parcela de <span className="font-bold text-[var(--color-text)]">{entry.originLabel}</span>,
+                venceu em <span className="font-bold text-[var(--color-text)] tnum">{formatDate(entry.dueDate)}</span>
+                {entry.overdueLabel && <span className="text-[var(--color-danger)] font-bold"> ({entry.overdueLabel})</span>}.
+                Ela continua aqui até ser paga. As parcelas são quitadas em ordem: a mais antiga primeiro.
+              </>
+            ) : (
+              <>
+                Parcela {installmentNumber} de {debt.totalInstallments}, vence em{' '}
+                <span className="font-bold text-[var(--color-text)] tnum">{formatDate(entry.dueDate)}</span>.
+              </>
+            )}
+          </div>
+          {!isCarried && (
           <button
             onClick={onSkip}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-transform active:scale-95 border border-[var(--color-border)]"
@@ -160,6 +191,7 @@ export function RecurringBillItem({
             <ArrowRight size={14} />
             Adiar para o próximo mês
           </button>
+          )}
         </div>
       )}
     </div>

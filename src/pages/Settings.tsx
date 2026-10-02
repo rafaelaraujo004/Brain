@@ -10,6 +10,7 @@ import { MonthSelector } from '../components/MonthSelector';
 import type { AppSettings } from '../types';
 import { HelpButton } from '../components/HelpModal';
 import { useAuth } from '../contexts/AuthContext';
+import { InformalLoanSection } from '../components/settings/InformalLoanSection';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -591,6 +592,9 @@ export function SettingsPage() {
       </div>
       </div>
 
+      {/* Dinheiro com agiota */}
+      <InformalLoanSection />
+
       {/* Backup / Restore */}
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
@@ -758,6 +762,7 @@ export function SettingsPage() {
                 await db.monthlyConfigs.clear();
                 await db.incomeSources.clear();
                 await db.priorities.clear();
+                await db.loans.clear();
                 await db.settings.clear();
               },
               description: 'Remove absolutamente todos os dados do app.',
