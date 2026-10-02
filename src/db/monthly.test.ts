@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   db,
-  ensureCarryOverBillsForMonth,
   ensureMonthlyBillOccurrences,
+  planAutoRecurrenceCleanup,
   setBillSeriesMonthly,
   skipBillToNextMonth,
 } from './database';
@@ -158,102 +158,23 @@ describe('contas mensais', () => {
   });
 });
 
-describe('adiar acumula sozinho', () => {
+describe('adiar não cria recorrência', () => {
   beforeEach(async () => {
     await db.bills.clear();
   });
 
-  it('adiar uma conta avulsa passa a gerar as faturas seguintes', async () => {
-    // O usuário não precisa lembrar de marcar nada: adiar já significa que a
-    // conta volta no mês que vem.
-    const avulsa = await createMonthlyBill({ isMonthly: false });
-    expect(avulsa.isMonthly).toBe(false);
-
-    await skipBillToNextMonth(avulsa);
-
-    const depois = await db.bills.get(avulsa.id!);
-    expect(depois?.isMonthly).toBe(true);
-    expect(await ensureMonthlyBillOccurrences(7, 2026)).toBe(1);
-  });
-
-  it('tres adiamentos viram tres dividas individuais no destino', async () => {
-    // Cenário do usuário: adiei a mesma conta por três meses e quero ver as
-    // três no mês de destino, cada uma sabendo quando venceu.
-    await createMonthlyBill({ isMonthly: false });
-
-    for (const mes of [6, 7, 8]) {
-      await ensureMonthlyBillOccurrences(mes, 2026);
-      const emAberto = (await billsOf(mes, 2026)).filter((b) => b.status === 'pending');
-      for (const conta of emAberto) await skipBillToNextMonth(conta);
-    }
-    await ensureMonthlyBillOccurrences(9, 2026);
-
-    const setembro = (await billsOf(9, 2026)).filter((b) => b.status === 'pending');
-
-    const adiadas = setembro
-      .filter((b) => (b.postponeHistory ?? []).length > 0)
-      .map((b) => ({
-        venceu: `${b.originMonth}/${b.originYear}`,
-        vezes: (b.postponeHistory ?? []).length,
-      }))
-      .sort((a, b) => a.venceu.localeCompare(b.venceu));
-
-    expect(adiadas).toEqual([
-      { venceu: '6/2026', vezes: 3 },
-      { venceu: '7/2026', vezes: 2 },
-      { venceu: '8/2026', vezes: 1 },
-    ]);
-  });
-
-  it('desmarcar depois interrompe a geração', async () => {
-    // Escape para quem adiou uma conta que era mesmo avulsa.
+  it('adiar uma conta avulsa não a transforma em mensal', async () => {
     const avulsa = await createMonthlyBill({ isMonthly: false });
     await skipBillToNextMonth(avulsa);
-    await setBillSeriesMonthly(avulsa.seriesId ?? avulsa.id!, false);
 
-    expect(await ensureMonthlyBillOccurrences(7, 2026)).toBe(0);
-  });
-});
-
-describe('carry-over automático da virada de mês', () => {
-  beforeEach(async () => {
-    await db.bills.clear();
+    expect((await db.bills.get(avulsa.id!))?.isMonthly).toBe(false);
+    // Julho tem só a dívida adiada; nenhum mês seguinte ganha fatura nova.
+    for (const mes of [7, 8, 9, 10]) await ensureMonthlyBillOccurrences(mes, 2026);
+    expect(await billsOf(7, 2026)).toHaveLength(1);
+    for (const mes of [8, 9, 10]) expect(await billsOf(mes, 2026)).toHaveLength(0);
   });
 
-  it('tira a dívida do mês de origem em vez de contar nos dois', async () => {
-    // Antes a original ficava pendente e uma cópia ia para o mês seguinte, o
-    // que fazia a mesma dívida ser somada duas vezes.
-    const junho = await createMonthlyBill({ isMonthly: false });
-
-    const trazidas = await ensureCarryOverBillsForMonth(7, 2026);
-    expect(trazidas).toBe(1);
-
-    const emJunho = await billsOf(6, 2026);
-    expect(emJunho).toHaveLength(1);
-    expect(emJunho[0].status).toBe('skipped');
-    expect(emJunho[0].id).toBe(junho.id);
-
-    const emJulho = await billsOf(7, 2026);
-    expect(emJulho).toHaveLength(1);
-    expect(emJulho[0].status).toBe('pending');
-    expect(emJulho[0].originMonth).toBe(6);
-
-    // Somando os dois meses, a dívida aparece uma vez só.
-    const todas = await db.bills.toArray();
-    const emAberto = todas.filter((b) => b.status === 'pending');
-    expect(emAberto.reduce((s, b) => s + b.finalValue, 0)).toBe(150);
-  });
-});
-
-describe('adiamento para meses futuros', () => {
-  beforeEach(async () => {
-    await db.bills.clear();
-  });
-
-  it('setembro empurrado até novembro deixa três dívidas em novembro', async () => {
-    // Caso relatado: a conta veio de setembro, foi adiada duas vezes e chegou
-    // em novembro sozinha. Outubro e novembro são meses futuros, e a geração
-    // estava bloqueada para eles — então não havia com o que somar.
+  it('setembro adiado até novembro é uma dívida só, com o histórico dos dois adiamentos', async () => {
     const setembro = await createMonthlyBill({
       month: 9,
       year: 2026,
@@ -267,37 +188,101 @@ describe('adiamento para meses futuros', () => {
       description: 'ZCXCXZ',
     });
 
-    // Setembro → outubro
     await skipBillToNextMonth(setembro);
-
-    // Ao abrir outubro, a fatura de outubro nasce e convive com a adiada.
     await ensureMonthlyBillOccurrences(10, 2026);
     const outubro = (await billsOf(10, 2026)).filter((b) => b.status === 'pending');
-    expect(outubro).toHaveLength(2);
+    expect(outubro).toHaveLength(1);
 
-    // Outubro → novembro, empurrando as duas.
-    for (const conta of outubro) await skipBillToNextMonth(conta);
+    await skipBillToNextMonth(outubro[0]);
     await ensureMonthlyBillOccurrences(11, 2026);
+    await ensureMonthlyBillOccurrences(12, 2026);
 
     const novembro = (await billsOf(11, 2026)).filter((b) => b.status === 'pending');
-    const linhas = novembro
-      .map((b) => ({
-        veioDe: `${b.originMonth}/${b.originYear}`,
-        vezes: (b.postponeHistory ?? []).length,
-      }))
-      .sort((a, b) => a.veioDe.localeCompare(b.veioDe));
+    expect(novembro).toHaveLength(1);
+    expect(novembro[0]).toMatchObject({ originMonth: 9, finalValue: 500 });
+    expect(novembro[0].postponeHistory).toHaveLength(2);
 
-    expect(linhas).toEqual([
-      { veioDe: '10/2026', vezes: 1 },
-      { veioDe: '11/2026', vezes: 0 },
-      { veioDe: '9/2026', vezes: 2 },
-    ]);
-    expect(novembro.reduce((s, b) => s + b.finalValue, 0)).toBe(1500);
+    // Ela para em novembro: dezembro não recebe nada sem um novo adiamento.
+    expect(await billsOf(12, 2026)).toHaveLength(0);
+  });
 
-    // Setembro e outubro ficam zerados: as dívidas andaram, não se duplicaram.
-    for (const m of [9, 10]) {
-      const abertas = (await billsOf(m, 2026)).filter((b) => b.status === 'pending');
-      expect(abertas).toHaveLength(0);
-    }
+  it('conta não paga fica no mês dela até alguém adiar', async () => {
+    const junho = await createMonthlyBill({ isMonthly: false });
+    await ensureMonthlyBillOccurrences(7, 2026);
+
+    expect((await db.bills.get(junho.id!))?.status).toBe('pending');
+    expect(await billsOf(7, 2026)).toHaveLength(0);
+  });
+
+  it('conta marcada como mensal continua gerando e somando, por escolha do usuário', async () => {
+    const setembro = await createMonthlyBill({
+      month: 9,
+      year: 2026,
+      originMonth: 9,
+      originYear: 2026,
+      originalDueDate: new Date(2026, 8, 1).toISOString(),
+      isMonthly: true,
+    });
+
+    await skipBillToNextMonth(setembro);
+    await ensureMonthlyBillOccurrences(10, 2026);
+    const outubro = (await billsOf(10, 2026)).filter((b) => b.status === 'pending');
+    expect(outubro.map((b) => b.originMonth).sort()).toEqual([10, 9]);
+  });
+});
+
+describe('limpeza das recorrências criadas pelo adiamento', () => {
+  const today = new Date(2026, 9, 2); // outubro/2026
+
+  function bill(partial: Partial<Bill> & Pick<Bill, 'id' | 'month'>): Bill {
+    return {
+      description: 'Conta',
+      initialValue: 100,
+      finalValue: 100,
+      status: 'pending',
+      dueDay: 5,
+      observation: '',
+      year: 2026,
+      seriesId: 1,
+      originMonth: partial.month,
+      originYear: 2026,
+      postponeHistory: [],
+      isMonthly: true,
+      ...partial,
+    } as Bill;
+  }
+
+  const manual = { fromMonth: 9, fromYear: 2026, toMonth: 10, toYear: 2026, postponedAt: '', dueDate: '' };
+
+  it('desliga a repetição e apaga só as faturas futuras que ela gerou', () => {
+    const plan = planAutoRecurrenceCleanup(
+      [
+        bill({ id: 1, month: 9, status: 'skipped' }),
+        bill({ id: 2, month: 10, originMonth: 9, postponeHistory: [manual], carriedFromBillId: 1 }),
+        bill({ id: 3, month: 10 }), // gerada no mês atual: o usuário decide
+        bill({ id: 4, month: 11 }), // futura gerada: sai
+        bill({ id: 5, month: 12 }), // futura gerada: sai
+        bill({ id: 6, month: 11, status: 'paid' }), // já paga: fica
+      ],
+      today
+    );
+    expect(plan.unmarkIds.sort()).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(plan.deleteIds.sort()).toEqual([4, 5]);
+  });
+
+  it('não mexe em série mensal que nunca foi adiada à mão', () => {
+    const plan = planAutoRecurrenceCleanup(
+      [bill({ id: 1, month: 10 }), bill({ id: 2, month: 11 })],
+      today
+    );
+    expect(plan).toEqual({ unmarkIds: [], deleteIds: [] });
+  });
+
+  it('não mexe nos juros do agiota', () => {
+    const plan = planAutoRecurrenceCleanup(
+      [bill({ id: 1, month: 11, loanId: 3, postponeHistory: [manual] })],
+      today
+    );
+    expect(plan).toEqual({ unmarkIds: [], deleteIds: [] });
   });
 });

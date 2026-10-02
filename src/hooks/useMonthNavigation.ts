@@ -26,5 +26,11 @@ export function useMonthNavigation() {
     });
   }, []);
 
-  return { month, year, goToPrev, goToNext };
+  /** Pula direto para uma competência (ex.: um mês com contas vencidas). */
+  const goTo = useCallback((nextMonth: number, nextYear: number) => {
+    setMonth(nextMonth);
+    setYear(nextYear);
+  }, []);
+
+  return { month, year, goToPrev, goToNext, goTo };
 }

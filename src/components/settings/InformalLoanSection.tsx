@@ -11,23 +11,11 @@ import {
   updateInformalLoanRate,
 } from '../../db/database';
 import type { Bill, InformalLoan } from '../../types';
-import { formatCurrency, getMonthName, getShortMonthName } from '../../utils/formatters';
+import { formatCurrency, getMonthName, getShortMonthName, parseMoneyInput } from '../../utils/formatters';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useToast } from '../Toast';
 
 const DEFAULT_RATE = '10';
-
-function parseMoney(raw: string): number {
-  const cleaned = raw.trim().replace(/\s|R\$/g, '');
-  if (!cleaned) return 0;
-  // "5.000" e "5.000,50" usam ponto de milhar; "5000,5" e "5000.5" são decimais.
-  const normalized =
-    /^\d{1,3}(\.\d{3})+(,\d+)?$/.test(cleaned) || cleaned.includes(',')
-      ? cleaned.replace(/\./g, '').replace(',', '.')
-      : cleaned;
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : 0;
-}
 
 function parseRate(raw: string): number {
   const value = Number(raw.trim().replace(',', '.'));
@@ -70,7 +58,7 @@ export function InformalLoanSection() {
   const active = (loans ?? []).filter((l) => l.status === 'active');
   const paid = (loans ?? []).filter((l) => l.status === 'paid');
 
-  const amount = parseMoney(principal);
+  const amount = parseMoneyInput(principal);
   const ratePct = parseRate(rate);
   const monthly = loanMonthlyInterest({ principal: amount, monthlyRatePercent: ratePct });
   const firstCharge = nextMonth(takenMonth, takenYear);

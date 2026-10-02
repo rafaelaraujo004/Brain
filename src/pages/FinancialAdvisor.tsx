@@ -21,8 +21,8 @@ import { useFinancialSnapshot } from '../advisor/useFinancialSnapshot';
 import { AskPanel } from '../components/advisor/AskPanel';
 import { ListSkeleton } from '../components/PageSpinner';
 import { db, getOrCreateSettings } from '../db/database';
-import { formatCurrency, getMonthName, startOfToday } from '../utils/formatters';
-import { getPostponeStatus, getRecurringStatusForMonth } from '../utils/bills';
+import { formatCurrency, formatDate, getMonthName, startOfToday } from '../utils/formatters';
+import { getPostponeStatus, getRecurringStatusForMonth, installmentFraction, isOpenEnded } from '../utils/bills';
 import type { RecurringDebt, PriorityLevel } from '../types';
 import { HelpButton } from '../components/HelpModal';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
@@ -226,7 +226,7 @@ export function FinancialAdvisor() {
 
       items.push({
         id: `rec-${d.id}`,
-        description: `${d.description} (${info.installmentNumber}/${d.totalInstallments})`,
+        description: `${d.description} (${installmentFraction(d, info.installmentNumber)})`,
         value: d.installmentValue,
         dueDay: d.dueDay,
         dueDate: info.dueDate,
@@ -257,18 +257,18 @@ export function FinancialAdvisor() {
     const totalPending = pendingBills.reduce((s, b) => s + b.finalValue, 0);
 
     // Alert: bills due in the next 3 days (current month only)
-    const urgentBills = isCurrentSelectedMonth
-      ? pendingBills.filter((b) => {
-          const diff = b.dueDay - currentDay;
-          return diff >= 0 && diff <= 3;
-        })
-      : [];
+    // Pela data real: vale também para a conta que vence no mês seguinte.
+    const todayStart = startOfToday();
+    const urgentBills = pendingBills.filter((b) => {
+      const diff = Math.round((getPostponeStatus(b).currentDueDate.getTime() - todayStart.getTime()) / 86400000);
+      return diff >= 0 && diff <= 3;
+    });
     if (urgentBills.length > 0) {
       tips.push({
         type: 'alert',
         icon: AlertTriangle,
         title: 'Contas vencendo em breve!',
-        message: `${urgentBills.map((b) => `${b.description} (dia ${b.dueDay})`).join(', ')} — total de ${formatCurrency(urgentBills.reduce((s, b) => s + b.finalValue, 0))}`,
+        message: `${urgentBills.map((b) => `${b.originalDescription ?? b.description} (${formatDate(getPostponeStatus(b).currentDueDate)})`).join(', ')} — total de ${formatCurrency(urgentBills.reduce((s, b) => s + b.finalValue, 0))}`,
         priority: 100,
       });
     }
@@ -372,7 +372,8 @@ export function FinancialAdvisor() {
 
     // Tip: recurring debts nearing completion
     recurringDebts.forEach((d) => {
-      const remaining = d.totalInstallments - d.paidInstallments;
+      if (isOpenEnded(d)) return;
+      const remaining = (d.totalInstallments as number) - d.paidInstallments;
       if (remaining > 0 && remaining <= 3) {
         tips.push({
           type: 'tip',

@@ -27,6 +27,11 @@ export interface Bill {
   finalValue: number;
   status: 'pending' | 'paid' | 'skipped';
   dueDay: number;
+  /**
+   * Quantos meses depois do mês da conta ela vence. 0 (ou ausente) = vence
+   * no próprio mês. Ex.: a conta de outubro que vence em 01/11 tem 1.
+   */
+  dueMonthOffset?: number;
   observation: string;
   month: number;
   year: number;
@@ -126,7 +131,11 @@ export type DebtCategory =
 export interface RecurringDebt {
   id?: number;
   description: string;
-  totalInstallments: number;
+  /**
+   * Número de parcelas. Ausente = dívida sem prazo definido: cobra todo mês
+   * até ser encerrada.
+   */
+  totalInstallments?: number;
   paidInstallments: number;
   installmentValue: number;
   dueDay: number;

@@ -5,6 +5,21 @@ export function formatCurrency(value: number): string {
   });
 }
 
+/**
+ * Lê um valor digitado em reais: "5.000", "5.000,50", "150,5", "150.5",
+ * "R$ 1.200". Ponto seguido de 3 dígitos é milhar; vírgula é decimal.
+ */
+export function parseMoneyInput(raw: string): number {
+  const cleaned = raw.trim().replace(/\s|R\$/g, '');
+  if (!cleaned) return 0;
+  const normalized =
+    /^\d{1,3}(\.\d{3})+(,\d+)?$/.test(cleaned) || cleaned.includes(',')
+      ? cleaned.replace(/\./g, '').replace(',', '.')
+      : cleaned;
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : 0;
+}
+
 export function getMonthName(month: number): string {
   const months = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -41,6 +56,34 @@ export function daysInMonth(month: number, year: number): number {
 export function buildDueDate(month: number, year: number, dueDay: number): Date {
   const day = Math.min(Math.max(dueDay, 1), daysInMonth(month, year));
   return new Date(year, month - 1, day);
+}
+
+/**
+ * Vencimento de uma conta da competência (month, year) que vence
+ * `offset` meses depois: a conta de outubro com vencimento em 01/11 tem
+ * offset 1.
+ */
+export function buildBillDueDate(month: number, year: number, dueDay: number, offset = 0): Date {
+  const index = year * 12 + (month - 1) + offset;
+  return buildDueDate((index % 12) + 1, Math.floor(index / 12), dueDay);
+}
+
+/** Date → "2026-11-01", o formato do campo de data. */
+export function toInputDate(date: Date): string {
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${mm}-${dd}`;
+}
+
+/** "2026-11-01" → { day: 1, month: 11, year: 2026 }; null se incompleta. */
+export function parseInputDate(value: string): { day: number; month: number; year: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { day, month, year };
 }
 
 /** Meia-noite de hoje, para comparacoes de vencimento sem ruido de horario. */

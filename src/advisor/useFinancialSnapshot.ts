@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, ensureCarryOverBillsForMonth, ensureLoanInterestBills, ensureMonthlyBillOccurrences } from '../db/database';
+import { db, ensureLoanInterestBills, ensureMonthlyBillOccurrences } from '../db/database';
 import { getCurrentMonthYear } from '../utils/formatters';
 import { buildSnapshot } from './snapshot';
 import type { FinancialSnapshot } from './types';
@@ -10,14 +10,13 @@ import type { FinancialSnapshot } from './types';
  * renda ou prioridade muda. `undefined` enquanto o banco carrega.
  */
 export function useFinancialSnapshot(): FinancialSnapshot | undefined {
-  // As faturas do mês corrente e os atrasos herdados normalmente nascem ao
-  // abrir o Início ou as Contas. Quem cai direto aqui também precisa deles.
+  // As faturas do mês corrente normalmente nascem ao abrir o Início ou as
+  // Contas. Quem cai direto aqui também precisa delas.
   useEffect(() => {
     const { month, year } = getCurrentMonthYear();
     void (async () => {
       await ensureLoanInterestBills(month, year);
       await ensureMonthlyBillOccurrences(month, year);
-      await ensureCarryOverBillsForMonth(month, year);
     })();
   }, []);
 

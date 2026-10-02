@@ -5,6 +5,7 @@ import { formatCurrency, getShortMonthName } from '../utils/formatters';
 import type { Bill, ExtraFund, IncomeSource, MonthlyConfig, RecurringDebt } from '../types';
 import { HelpButton } from '../components/HelpModal';
 import { PageSpinner } from '../components/PageSpinner';
+import { installmentLimit } from '../utils/bills';
 
 interface MonthlyResult {
   month: number;
@@ -30,7 +31,7 @@ function getRecentMonths(count = 12): { month: number; year: number }[] {
 function recurringAppliesToMonth(debt: RecurringDebt, month: number, year: number): boolean {
   const monthsSinceStart = (year - debt.startYear) * 12 + (month - debt.startMonth);
   const installmentNumber = monthsSinceStart + 1;
-  return installmentNumber >= 1 && installmentNumber <= debt.totalInstallments;
+  return installmentNumber >= 1 && installmentNumber <= installmentLimit(debt);
 }
 
 function calculateMonthlyResult(
@@ -47,7 +48,7 @@ function calculateMonthlyResult(
   const billDue = billsOfMonth.reduce((sum, b) => sum + b.finalValue, 0);
 
   const recurringDue = recurringDebts.reduce((sum, debt) => {
-    if (!debt.isActive && debt.paidInstallments >= debt.totalInstallments) return sum;
+    if (!debt.isActive && debt.paidInstallments >= installmentLimit(debt)) return sum;
     if (!recurringAppliesToMonth(debt, month, year)) return sum;
 
     // Avoid duplicate amount when month already has a linked bill from this recurring debt.

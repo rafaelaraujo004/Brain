@@ -1,11 +1,35 @@
-import { useState } from 'react';
-import { X, Check } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { X, Check, CalendarClock, AlertTriangle } from 'lucide-react';
 import { db, setBillSeriesCost, setBillSeriesMonthly, updateBillStatusWithSync } from '../../db/database';
-import { buildDueDate } from '../../utils/formatters';
+import {
+  buildBillDueDate,
+  formatDate,
+  getMonthName,
+  parseInputDate,
+  parseMoneyInput,
+  toInputDate,
+} from '../../utils/formatters';
+import { getCurrentDueDate } from '../../utils/bills';
 import type { Bill, DebtCategory } from '../../types';
 import { ChargesFields, parsePercent } from '../ChargesFields';
+import { useToast } from '../Toast';
 
-/** Formulário de criação e edição de conta. */
+/** Até quantos meses depois do mês da conta o vencimento pode cair. */
+const MAX_DUE_OFFSET = 11;
+
+/**
+ * Formulário de criação e edição de conta.
+ *
+ * Pede duas coisas separadas, porque elas nem sempre coincidem:
+ *
+ * - o MÊS DE INÍCIO, onde a conta aparece (a competência);
+ * - a DATA COMPLETA do vencimento.
+ *
+ * A energia de outubro que vence em 01/11/2026 aparece em outubro e vence
+ * em novembro — sem isso, ou ela iria para a lista de novembro, ou ficaria
+ * com um vencimento falso em outubro. A diferença entre os dois é guardada
+ * como `dueMonthOffset` e acompanha a conta quando ela é adiada ou se repete.
+ */
 export function BillForm({
   bill,
   month,
@@ -17,10 +41,17 @@ export function BillForm({
   year: number;
   onClose: () => void;
 }) {
+  const { showToast } = useToast();
   const [description, setDescription] = useState(bill?.description ?? '');
-  const [initialValue, setInitialValue] = useState(bill?.initialValue?.toString() ?? '');
-  const [finalValue, setFinalValue] = useState(bill?.finalValue?.toString() ?? '');
-  const [dueDay, setDueDay] = useState(bill?.dueDay?.toString() ?? '');
+  const [initialValue, setInitialValue] = useState(
+    bill?.initialValue !== undefined ? String(bill.initialValue).replace('.', ',') : ''
+  );
+  const [finalValue, setFinalValue] = useState(
+    bill?.finalValue !== undefined ? String(bill.finalValue).replace('.', ',') : ''
+  );
+  const [startMonth, setStartMonth] = useState(bill?.month ?? month);
+  const [startYear, setStartYear] = useState(bill?.year ?? year);
+  const [dueDate, setDueDate] = useState(bill ? toInputDate(getCurrentDueDate(bill)) : '');
   const [observation, setObservation] = useState(bill?.observation ?? '');
   const [status, setStatus] = useState<'pending' | 'paid' | 'skipped'>(bill?.status ?? 'pending');
   const [isMonthly, setIsMonthly] = useState(bill?.isMonthly ?? false);
@@ -28,31 +59,72 @@ export function BillForm({
   const [lateFee, setLateFee] = useState(bill?.lateFeePercent?.toString().replace('.', ',') ?? '');
   const [interest, setInterest] = useState(bill?.monthlyInterestPercent?.toString().replace('.', ',') ?? '');
 
+  // Conta adiada: o mês dela muda pelos botões Adiar/Devolver, não aqui —
+  // senão o histórico de adiamentos deixaria de bater.
+  const wasPostponed = (bill?.postponeHistory?.length ?? 0) > 0 || Boolean(bill?.carriedFromBillId);
+
+  const parsedDue = parseInputDate(dueDate);
+  const offset = parsedDue
+    ? parsedDue.year * 12 + parsedDue.month - (startYear * 12 + startMonth)
+    : null;
+  const dateError =
+    offset === null
+      ? null
+      : offset < 0
+      ? `O vencimento não pode ser antes de ${getMonthName(startMonth)}/${startYear}, o mês da conta.`
+      : offset > MAX_DUE_OFFSET
+      ? 'O vencimento está mais de um ano depois do mês da conta. Confira a data.'
+      : null;
+  const canSave = parsedDue !== null && dateError === null;
+
+  const preview = useMemo(() => {
+    if (!parsedDue || offset === null || dateError) return null;
+    const next =
+      startMonth === 12 ? { month: 1, year: startYear + 1 } : { month: startMonth + 1, year: startYear };
+    return {
+      due: buildBillDueDate(startMonth, startYear, parsedDue.day, offset),
+      nextDue: buildBillDueDate(next.month, next.year, parsedDue.day, offset),
+      next,
+    };
+  }, [parsedDue, offset, dateError, startMonth, startYear]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!parsedDue || offset === null || dateError) return;
 
-    const initial = parseFloat(initialValue.replace(',', '.')) || 0;
-    const final = parseFloat(finalValue.replace(',', '.')) || initial;
+    const initial = parseMoneyInput(initialValue);
+    const final = parseMoneyInput(finalValue) || initial;
+    const dueMonthOffset = offset > 0 ? offset : undefined;
+    const originalDueDate = buildBillDueDate(startMonth, startYear, parsedDue.day, offset).toISOString();
 
     const data: Omit<Bill, 'id'> = {
       description: description.trim(),
       initialValue: initial,
-      finalValue: final || initial,
+      finalValue: final,
       status,
-      dueDay: parseInt(dueDay) || 1,
+      dueDay: parsedDue.day,
+      dueMonthOffset,
       observation: observation.trim(),
-      month,
-      year,
+      month: startMonth,
+      year: startYear,
       recurringDebtId: bill?.recurringDebtId,
-      // Vazio = automático: o tipo é deduzido da descrição e os encargos vêm
-      // do tipo. `undefined` faz o Dexie apagar o campo na edição.
+      // Vazio = automático: o tipo é deduzido da descrição e não há
+      // encargos. `undefined` faz o Dexie apagar o campo na edição.
       category: category || undefined,
       lateFeePercent: parsePercent(lateFee),
       monthlyInterestPercent: parsePercent(interest),
     };
 
     if (bill?.id) {
-      await db.bills.update(bill.id, { ...data, status: bill.status });
+      await db.bills.update(bill.id, {
+        ...data,
+        status: bill.status,
+        // Conta nunca adiada: o mês e o vencimento escolhidos são os
+        // originais. Adiada: a origem é a do histórico, não muda.
+        ...(wasPostponed
+          ? {}
+          : { originMonth: startMonth, originYear: startYear, originalDueDate }),
+      });
       await updateBillStatusWithSync(bill.id, status);
       // A marcação vale para a série inteira, não só para esta competência.
       if (isMonthly !== (bill.isMonthly ?? false)) {
@@ -71,19 +143,23 @@ export function BillForm({
         });
       }
     } else {
-      const day = parseInt(dueDay) || 1;
       const newId = await db.bills.add({
         ...data,
         isMonthly,
-        originMonth: month,
-        originYear: year,
-        originalDueDate: buildDueDate(month, year, day).toISOString(),
+        originMonth: startMonth,
+        originYear: startYear,
+        originalDueDate,
         postponeHistory: [],
       });
       // A primeira ocorrência dá nome à série.
       await db.bills.update(newId as number, { seriesId: newId as number });
     }
 
+    // Salva num mês diferente do que está na tela: a conta "some" da lista,
+    // então é preciso dizer para onde ela foi.
+    if (startMonth !== month || startYear !== year) {
+      showToast({ message: `Conta salva em ${getMonthName(startMonth)}/${startYear}.`, tone: 'info' });
+    }
     onClose();
   };
 
@@ -145,28 +221,100 @@ export function BillForm({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <input
-              type="number"
-              inputMode="numeric"
-              placeholder="Dia vencimento"
-              value={dueDay}
-              onChange={(e) => setDueDay(e.target.value)}
-              className="input-field"
-              min="1"
-              max="31"
-              required
-            />
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value as 'pending' | 'paid' | 'skipped')}
-              className="input-field"
-            >
-              <option value="pending">Pendente</option>
-              <option value="paid">Pago</option>
-              <option value="skipped">Adiado</option>
-            </select>
+          {/* --- Mês de início ------------------------------------------- */}
+          <div>
+            <label className="text-xs text-[var(--color-text-secondary)] mb-1 block">
+              Mês de início <span className="text-[var(--color-text-tertiary)]">(mês em que a conta aparece)</span>
+            </label>
+            {wasPostponed ? (
+              <p className="input-field !py-2.5 text-sm text-[var(--color-text-secondary)]">
+                {getMonthName(startMonth)}/{startYear}
+                <span className="block text-[11px] text-[var(--color-text-tertiary)]">
+                  Conta adiada: o mês muda pelos botões Adiar e Devolver.
+                </span>
+              </p>
+            ) : (
+              <div className="grid grid-cols-[1fr_5.5rem] gap-2">
+                <select
+                  value={startMonth}
+                  onChange={(e) => setStartMonth(Number(e.target.value))}
+                  className="input-field"
+                  aria-label="Mês de início"
+                >
+                  {Array.from({ length: 12 }, (_, i) => (
+                    <option key={i + 1} value={i + 1}>
+                      {getMonthName(i + 1)}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  value={startYear}
+                  onChange={(e) => setStartYear(Number(e.target.value) || year)}
+                  className="input-field !px-3"
+                  min={2000}
+                  max={2100}
+                  aria-label="Ano de início"
+                />
+              </div>
+            )}
           </div>
+
+          {/* --- Vencimento ---------------------------------------------- */}
+          <div>
+            <label htmlFor="bill-due" className="text-xs text-[var(--color-text-secondary)] mb-1 block">
+              Data do vencimento <span className="text-[var(--color-danger)]">*</span>
+            </label>
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <input
+                id="bill-due"
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="input-field tnum"
+                min="2000-01-01"
+                max="2100-12-31"
+                required
+              />
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value as 'pending' | 'paid' | 'skipped')}
+                className="input-field !w-auto"
+                aria-label="Situação"
+              >
+                <option value="pending">Pendente</option>
+                <option value="paid">Pago</option>
+                <option value="skipped">Adiado</option>
+              </select>
+            </div>
+            <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1 leading-relaxed">
+              Dia, mês e ano — ex.: a conta de outubro que vence no dia 1 do mês seguinte: 01/11/2026.
+            </p>
+          </div>
+
+          {dateError && (
+            <p className="flex items-start gap-2 text-xs font-semibold text-[var(--color-danger)]">
+              <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+              {dateError}
+            </p>
+          )}
+
+          {preview && (
+            <div className="rounded-2xl p-3.5 space-y-1" style={{ background: 'var(--color-surface-2)' }}>
+              <p className="flex items-start gap-2 text-sm">
+                <CalendarClock size={16} className="text-[var(--color-primary)] flex-shrink-0 mt-0.5" />
+                <span>
+                  Aparece em <span className="font-bold">{getMonthName(startMonth)}/{startYear}</span> e vence em{' '}
+                  <span className="font-bold tnum">{formatDate(preview.due)}</span>.
+                </span>
+              </p>
+              {isMonthly && (
+                <p className="text-[11px] text-[var(--color-text-secondary)] pl-6 tnum">
+                  Todo mês igual: a de {getMonthName(preview.next.month)} vence em {formatDate(preview.nextDue)}.
+                </p>
+              )}
+            </div>
+          )}
 
           <input
             type="text"
@@ -176,9 +324,8 @@ export function BillForm({
             className="input-field"
           />
 
-          {/* Repetição mensal. Liga sozinha no primeiro adiamento, então o
-              texto serve mais para explicar o que já está acontecendo e para
-              dar o caminho de volta em conta que era mesmo avulsa. */}
+          {/* Repetição mensal. Só liga quando o usuário marca: adiar não
+              transforma uma conta em mensal. */}
           <button
             type="button"
             onClick={() => setIsMonthly((v) => !v)}
@@ -203,8 +350,8 @@ export function BillForm({
               <span className="block text-sm font-semibold">Repete todo mês</span>
               <span className="block text-[11px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
                 {isMonthly
-                  ? 'Cada mês ganha a própria fatura, e a adiada se soma à nova — três meses sem pagar viram três dívidas separadas. Desmarque se esta conta não volta todo mês.'
-                  : 'Conta avulsa: não gera fatura nos meses seguintes. Adiar liga esta opção automaticamente.'}
+                  ? 'Cada mês ganha a própria fatura, com o mesmo dia de vencimento. Desmarque se esta conta não volta todo mês.'
+                  : 'Conta avulsa: aparece só no mês de início. Se adiar, ela vai apenas para o mês seguinte.'}
               </span>
             </span>
           </button>
@@ -219,7 +366,7 @@ export function BillForm({
             onInterest={setInterest}
           />
 
-          <button type="submit" className="btn-primary w-full">
+          <button type="submit" className="btn-primary w-full disabled:opacity-40" disabled={!canSave}>
             {bill ? 'Salvar' : 'Adicionar'}
           </button>
         </form>

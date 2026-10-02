@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Check, RefreshCw, ArrowRight } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../utils/formatters';
-import type { InstallmentEntry } from '../../utils/bills';
+import { installmentFraction, isOpenEnded, type InstallmentEntry } from '../../utils/bills';
 
 /**
  * Cartão de uma parcela de dívida parcelada que ainda não virou conta.
@@ -63,7 +63,9 @@ export function RecurringBillItem({
     setShowActions(!showActions);
   };
 
-  const progress = (installmentNumber / debt.totalInstallments) * 100;
+  // Dívida sem prazo não tem "quanto falta": a barra some.
+  const openEnded = isOpenEnded(debt);
+  const progress = openEnded ? 0 : (installmentNumber / (debt.totalInstallments as number)) * 100;
 
   return (
     <div
@@ -107,7 +109,7 @@ export function RecurringBillItem({
               {formatDate(entry.dueDate)}
             </span>
             <span className="text-[11px] font-semibold text-[var(--color-primary)] tnum">
-              Parcela {installmentNumber}/{debt.totalInstallments}
+              Parcela {installmentFraction(debt, installmentNumber)}
             </span>
             {isCarried && (
               <span className="text-[11px] font-semibold text-[var(--color-warning)]">
@@ -122,6 +124,7 @@ export function RecurringBillItem({
           </div>
           {/* Trilho de parcelas: mostra o quanto da dívida já foi andado sem
               ocupar mais uma linha de texto. */}
+          {!openEnded && (
           <div
             className="mt-1.5 h-1 rounded-full overflow-hidden"
             style={{ background: 'var(--color-surface-2)' }}
@@ -131,6 +134,7 @@ export function RecurringBillItem({
               style={{ width: `${progress}%`, background: 'var(--color-primary)' }}
             />
           </div>
+          )}
         </div>
 
         <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
@@ -177,7 +181,7 @@ export function RecurringBillItem({
               </>
             ) : (
               <>
-                Parcela {installmentNumber} de {debt.totalInstallments}, vence em{' '}
+                Parcela {openEnded ? installmentNumber : `${installmentNumber} de ${debt.totalInstallments}`}, vence em{' '}
                 <span className="font-bold text-[var(--color-text)] tnum">{formatDate(entry.dueDate)}</span>.
               </>
             )}

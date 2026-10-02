@@ -65,7 +65,7 @@ describe('dinheiro com agiota', () => {
     expect(await loanBills(id)).toHaveLength(1);
   });
 
-  it('lançado com data antiga, traz os juros em aberto para o mês atual, um card por mês', async () => {
+  it('lançado com data antiga, cada mês fica com os juros dele, sem andar sozinho', async () => {
     await db.bills.add({
       description: 'Outra conta',
       initialValue: 80,
@@ -78,13 +78,14 @@ describe('dinheiro com agiota', () => {
     });
     const id = await newLoan(7); // pegou em julho → juros de ago, set e out
 
-    const pendingInOctober = (await loanBills(id))
+    const pending = (await loanBills(id))
       .filter((b) => b.status === 'pending')
       .map((b) => [b.month, b.originMonth, b.postponeHistory?.length ?? 0]);
-    expect(pendingInOctober.sort()).toEqual([
+    // Agosto, setembro e outubro, cada um no seu mês. Só um "Adiar" move.
+    expect(pending.sort()).toEqual([
       [10, 10, 0],
-      [10, 8, 2],
-      [10, 9, 1],
+      [8, 8, 0],
+      [9, 9, 0],
     ].sort());
 
     // As outras contas não foram mexidas.

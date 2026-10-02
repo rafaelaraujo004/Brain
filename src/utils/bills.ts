@@ -1,5 +1,6 @@
 import type { Bill, PostponeRecord, RecurringDebt } from '../types';
 import {
+  buildBillDueDate,
   buildDueDate,
   daysInMonth,
   daysOverdue,
@@ -28,7 +29,7 @@ export function getPostponeHistory(bill: Bill): PostponeRecord[] {
         toMonth: bill.month,
         toYear: bill.year,
         postponedAt: new Date(bill.year, bill.month - 1, 1).toISOString(),
-        dueDate: buildDueDate(bill.carriedFromMonth, bill.carriedFromYear, bill.dueDay).toISOString(),
+        dueDate: buildBillDueDate(bill.carriedFromMonth, bill.carriedFromYear, bill.dueDay, bill.dueMonthOffset).toISOString(),
         auto: true,
       },
     ];
@@ -38,7 +39,7 @@ export function getPostponeHistory(bill: Bill): PostponeRecord[] {
 
 /** Vencimento efetivo da conta na competência em que ela está hoje. */
 export function getCurrentDueDate(bill: Bill): Date {
-  return buildDueDate(bill.month, bill.year, bill.dueDay);
+  return buildBillDueDate(bill.month, bill.year, bill.dueDay, bill.dueMonthOffset);
 }
 
 /** Vencimento original — o que a conta tinha antes do primeiro adiamento. */
@@ -48,7 +49,7 @@ export function getOriginalDueDate(bill: Bill): Date {
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
   const origin = getOriginMonthYear(bill);
-  return buildDueDate(origin.month, origin.year, bill.dueDay);
+  return buildBillDueDate(origin.month, origin.year, bill.dueDay, bill.dueMonthOffset);
 }
 
 export interface PostponeStatus {
@@ -115,6 +116,21 @@ export function formatPostponeSummary(status: PostponeStatus): string {
   return parts.join(' • ');
 }
 
+/** Dívida sem número de parcelas: cobra todo mês até ser encerrada. */
+export function isOpenEnded(debt: Pick<RecurringDebt, 'totalInstallments'>): boolean {
+  return debt.totalInstallments === undefined || debt.totalInstallments === null;
+}
+
+/** Número da última parcela; Infinity quando a dívida não tem prazo. */
+export function installmentLimit(debt: Pick<RecurringDebt, 'totalInstallments'>): number {
+  return isOpenEnded(debt) ? Infinity : (debt.totalInstallments as number);
+}
+
+/** "3/10" — ou só "3" quando a dívida não tem número de parcelas. */
+export function installmentFraction(debt: Pick<RecurringDebt, 'totalInstallments'>, n: number): string {
+  return isOpenEnded(debt) ? String(n) : `${n}/${debt.totalInstallments}`;
+}
+
 /**
  * Situação de uma parcela recorrente numa competência. Antes cada tela
  * recalculava isso na mão e todas repetiam o mesmo erro: só consideravam
@@ -140,7 +156,7 @@ export function getRecurringStatusForMonth(
   const installmentNumber = monthsSinceStart + 1;
   const dueDate = buildDueDate(month, year, debt.dueDay);
 
-  if (installmentNumber < 1 || installmentNumber > debt.totalInstallments) {
+  if (installmentNumber < 1 || installmentNumber > installmentLimit(debt)) {
     return {
       applies: false,
       installmentNumber: 0,
@@ -305,7 +321,7 @@ export function getInstallmentsForMonth(
   const isCurrent = today.getFullYear() === year && today.getMonth() + 1 === month;
 
   if (isCurrent) {
-    const lastPast = Math.min(target - 1, debt.totalInstallments);
+    const lastPast = Math.min(target - 1, installmentLimit(debt));
     for (let n = debt.paidInstallments + 1; n <= lastPast; n++) {
       const when = installmentMonth(debt, n);
       if (linkedMonths.has(`${when.year}-${when.month}`)) continue;
@@ -313,7 +329,7 @@ export function getInstallmentsForMonth(
     }
   }
 
-  if (target >= 1 && target <= debt.totalInstallments && !linkedMonths.has(`${year}-${month}`)) {
+  if (target >= 1 && target <= installmentLimit(debt) && !linkedMonths.has(`${year}-${month}`)) {
     entries.push(buildInstallmentEntry(debt, target, false, today));
   }
   return entries;

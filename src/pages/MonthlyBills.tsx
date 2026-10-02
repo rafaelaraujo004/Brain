@@ -3,7 +3,6 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Plus, Search } from 'lucide-react';
 import {
   db,
-  ensureCarryOverBillsForMonth,
   ensureMonthlyBillOccurrences,
   ensureLoanInterestBills,
   removeCarryOverForPaidBill,
@@ -15,9 +14,15 @@ import {
   updateBillStatusWithSync,
   updateRecurringDebtPaidInstallmentsWithSync,
 } from '../db/database';
-import { formatCurrency, getMonthName } from '../utils/formatters';
+import { formatCurrency, getCurrentMonthYear, getMonthName, getShortMonthName } from '../utils/formatters';
 import { AnimatedCurrency } from '../components/AnimatedCurrency';
-import { getInstallmentsForMonth, getPostponeStatus, type InstallmentEntry } from '../utils/bills';
+import {
+  getCurrentDueDate,
+  getInstallmentsForMonth,
+  getPostponeStatus,
+  installmentFraction,
+  type InstallmentEntry,
+} from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import type { Bill, RecurringDebt } from '../types';
@@ -30,7 +35,31 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ListSkeleton } from '../components/PageSpinner';
 
 export function MonthlyBills() {
-  const { month, year, goToPrev, goToNext } = useMonthNavigation();
+  const { month, year, goToPrev, goToNext, goTo } = useMonthNavigation();
+  const current = getCurrentMonthYear();
+  const isCurrentMonth = month === current.month && year === current.year;
+
+  // Contas não pagas não andam sozinhas: ficam no mês em que venceram até o
+  // usuário pagar ou adiar. Este resumo é o que impede que elas sumam de
+  // vista quando se olha só o mês atual.
+  const olderPending = useLiveQuery(() => {
+    const currentIndex = current.year * 12 + current.month;
+    return db.bills
+      .filter((b) => b.status === 'pending' && b.year * 12 + b.month < currentIndex)
+      .toArray();
+  }, [current.month, current.year]);
+
+  const olderByMonth = useMemo(() => {
+    const groups = new Map<string, { month: number; year: number; count: number; total: number }>();
+    for (const bill of olderPending ?? []) {
+      const key = `${bill.year}-${bill.month}`;
+      const entry = groups.get(key) ?? { month: bill.month, year: bill.year, count: 0, total: 0 };
+      entry.count++;
+      entry.total += bill.finalValue;
+      groups.set(key, entry);
+    }
+    return [...groups.values()].sort((a, b) => b.year * 12 + b.month - (a.year * 12 + a.month));
+  }, [olderPending]);
   const [showForm, setShowForm] = useState(false);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -39,7 +68,12 @@ export function MonthlyBills() {
   const { showToast } = useToast();
 
   const bills = useLiveQuery(
-    () => db.bills.where({ month, year }).sortBy('dueDay'),
+    // Pela data real de vencimento: a conta do mês que vence no dia 1 do
+    // mês seguinte vem depois da que vence no dia 20 deste.
+    async () =>
+      (await db.bills.where({ month, year }).toArray()).sort(
+        (a, b) => getCurrentDueDate(a).getTime() - getCurrentDueDate(b).getTime()
+      ),
     [month, year]
   );
 
@@ -57,22 +91,13 @@ export function MonthlyBills() {
 
   useEffect(() => {
     void (async () => {
-      // Primeiro as faturas do próprio mês, depois o que ficou para trás —
-      // nesta ordem a conta mensal adiada encontra a fatura nova já criada.
+      // Só as faturas que nascem sozinhas: juros do agiota e contas marcadas
+      // como "repete todo mês". Nada é empurrado de um mês para outro sem o
+      // usuário tocar em Adiar.
       await ensureLoanInterestBills(month, year);
       await ensureMonthlyBillOccurrences(month, year);
-      const carried = await ensureCarryOverBillsForMonth(month, year);
-
-      // O carry-over automático movia contas em silêncio na virada do mês; o
-      // usuário via a lista mudar sem entender de onde vieram os itens.
-      if (carried > 0) {
-        showToast({
-          message: `${carried} conta${carried > 1 ? 's atrasadas foram trazidas' : ' atrasada foi trazida'} do mês anterior.`,
-          tone: 'info',
-        });
-      }
     })();
-  }, [month, year, showToast]);
+  }, [month, year]);
 
   useEffect(() => {
     setSelectedIds([]);
@@ -142,7 +167,7 @@ export function MonthlyBills() {
     // como pagas sem que tenham sido.
     if (!currentlyPaid && installmentNumber > debt.paidInstallments + 1) {
       showToast({
-        message: `Pague primeiro a parcela ${debt.paidInstallments + 1}/${debt.totalInstallments} de ${debt.description} — as parcelas são quitadas em ordem.`,
+        message: `Pague primeiro a parcela ${installmentFraction(debt, debt.paidInstallments + 1)} de ${debt.description} — as parcelas são quitadas em ordem.`,
         tone: 'warning',
       });
       return;
@@ -246,9 +271,9 @@ export function MonthlyBills() {
           items={[
             { icon: '✅', title: 'Marcar como paga', description: 'Toque no ícone à esquerda da conta para alternar entre pago e pendente.' },
             { icon: '📋', title: 'Ver ações', description: 'Toque no card da conta para expandir as opções de editar, postergar e excluir.' },
-            { icon: '➡️', title: 'Adiar', description: 'Empurra a conta para o mês seguinte. O mês de destino passa a gerar a própria fatura, então a adiada se soma a ela: três meses sem pagar viram três dívidas separadas, cada uma com o vencimento que ficou para trás.' },
+            { icon: '➡️', title: 'Adiar', description: 'Leva esta dívida para o mês seguinte, e só para ele. Ela não vira conta mensal e não anda sozinha: se não pagar, fica lá até você adiar de novo. O histórico guarda cada adiamento.' },
             { icon: '↩️', title: 'Devolver ao mês de origem', description: 'Contas vindas de outro mês mostram o botão verde (↩) para voltar à competência de origem e marcar como paga, limpando os meses do meio.' },
-            { icon: '↻', title: 'Conta mensal', description: 'O ícone de repetição indica que a conta volta todo mês. Liga sozinho no primeiro adiamento; desmarque na edição se a conta for avulsa.' },
+            { icon: '↻', title: 'Conta mensal', description: 'O ícone de repetição indica que a conta volta todo mês. Só aparece se você marcar "Repete todo mês" ao cadastrar ou editar.' },
             { icon: '➕', title: 'Adicionar conta', description: 'Use o botão + no canto inferior para cadastrar uma nova conta no mês.' },
           ]}
         />
@@ -279,6 +304,41 @@ export function MonthlyBills() {
         <Total label="Pago" value={totalPaid} color="var(--color-success)" />
         <Total label="Pendente" value={totalDue - totalPaid} color="var(--color-danger)" />
       </div>
+
+      {isCurrentMonth && olderByMonth.length > 0 && (
+        <div
+          className="card animate-rise !p-3.5"
+          style={{ borderColor: 'color-mix(in srgb, var(--color-danger) 35%, transparent)' }}
+        >
+          <p className="text-sm font-bold">
+            {(() => {
+              const total = olderByMonth.reduce((s, g) => s + g.count, 0);
+              const months = olderByMonth.length;
+              return `${total} ${total === 1 ? 'conta vencida' : 'contas vencidas'} em ${
+                months === 1 ? 'mês anterior' : 'meses anteriores'
+              }`;
+            })()}
+          </p>
+          <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
+            Elas ficam no mês em que venceram até você pagar ou adiar. Toque no mês para ir até lá.
+          </p>
+          <div className="flex flex-wrap gap-2 mt-3">
+            {olderByMonth.map((g) => (
+              <button
+                key={`${g.year}-${g.month}`}
+                onClick={() => goTo(g.month, g.year)}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-semibold transition-transform active:scale-95"
+                style={{ background: 'var(--color-danger-soft)', borderColor: 'transparent', color: 'var(--color-danger)' }}
+              >
+                {getShortMonthName(g.month)}/{g.year}
+                <span className="tnum text-[var(--color-text)]">
+                  {g.count} · {formatCurrency(g.total)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isSelectionMode && (
         <div className="card card-feature flex items-center justify-between gap-3 animate-rise">

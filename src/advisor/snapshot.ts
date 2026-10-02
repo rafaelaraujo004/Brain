@@ -14,6 +14,8 @@ import {
   getOriginMonthYear,
   getPostponeStatus,
   getRecurringStatusForMonth,
+  installmentFraction,
+  installmentLimit,
 } from '../utils/bills';
 import { resolveCostProfile, type CostProfile } from './categories';
 import { cents } from './money';
@@ -203,10 +205,11 @@ export function buildSnapshot(data: RawFinancialData, today: Date = startOfToday
   // ela vira uma conta (já contada acima), então só entram aqui as que
   // ficaram para trás sem ninguém mexer.
   for (const debt of data.recurringDebts) {
-    if (!debt.id || debt.paidInstallments >= debt.totalInstallments) continue;
+    if (!debt.id || debt.paidInstallments >= installmentLimit(debt)) continue;
     const profile = resolveCostProfile(debt);
 
-    for (let n = debt.paidInstallments + 1; n <= debt.totalInstallments; n++) {
+    // Sem número de parcelas o laço só termina no mês corrente (break abaixo).
+    for (let n = debt.paidInstallments + 1; n <= installmentLimit(debt); n++) {
       const when = addMonths(debt.startMonth, debt.startYear, n - 1);
       const dueDate = buildDueDate(when.month, when.year, debt.dueDay);
       const hasBill = data.bills.some(
@@ -222,7 +225,7 @@ export function buildSnapshot(data: RawFinancialData, today: Date = startOfToday
         id: `inst-${debt.id}-${n}`,
         recurringDebtId: debt.id,
         installmentNumber: n,
-        description: `${debt.description} (${n}/${debt.totalInstallments})`,
+        description: `${debt.description} (${installmentFraction(debt, n)})`,
         groupKey: `recurring-${debt.id}`,
         profile,
         amount: debt.installmentValue,

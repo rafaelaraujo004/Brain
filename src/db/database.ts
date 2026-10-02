@@ -1,6 +1,7 @@
 import Dexie, { type Table } from 'dexie';
 import type { Bill, RecurringDebt, ExtraFund, MonthlyConfig, AppSettings, IncomeSource, PriorityItem, PostponeRecord, InformalLoan } from '../types';
-import { buildDueDate, getMonthName } from '../utils/formatters';
+import { buildBillDueDate, buildDueDate, getMonthName } from '../utils/formatters';
+import { installmentFraction, installmentLimit } from '../utils/bills';
 import { collection, doc, getDoc, getDocs, limit, onSnapshot, query, setDoc, where, type Unsubscribe } from 'firebase/firestore';
 import { firestore } from './firebase';
 
@@ -196,7 +197,81 @@ class AppDatabase extends Dexie {
       priorities: '++id, keyword, level',
       loans: '++id, status',
     });
+
+    // v9: adiar deixou de ligar "repete todo mês". Desfaz as recorrências
+    // que o adiamento ligou sozinho e apaga as faturas futuras que elas
+    // geraram sem ninguém pedir.
+    this.version(9).stores({
+      bills: '++id, [month+year], recurringDebtId, status, dueDay, carriedFromBillId, [originYear+originMonth], postponedAt, seriesId, isMonthly, loanId',
+      recurringDebts: '++id, isActive',
+      extraFunds: '++id, [month+year]',
+      monthlyConfigs: '++id, [month+year]',
+      incomeSources: '++id, isActive',
+      settings: '++id',
+      priorities: '++id, keyword, level',
+      loans: '++id, status',
+    }).upgrade(async (tx) => {
+      const billsTable = tx.table('bills');
+      const all: Bill[] = await billsTable.toArray();
+      const plan = planAutoRecurrenceCleanup(all, new Date());
+      if (plan.unmarkIds.length > 0) {
+        await billsTable.bulkUpdate(plan.unmarkIds.map((key) => ({ key, changes: { isMonthly: false } })));
+      }
+      if (plan.deleteIds.length > 0) {
+        await billsTable.bulkDelete(plan.deleteIds);
+      }
+    });
   }
+}
+
+/**
+ * Até a v8, adiar uma conta ligava "repete todo mês" na série inteira, e a
+ * série passava a gerar faturas em todos os meses seguintes. Como o
+ * adiamento era a única coisa que ligava a repetição de forma automática,
+ * toda série com um adiamento manual é tratada como ligada por ele:
+ *
+ * - a repetição é desligada;
+ * - as faturas de meses futuros que a repetição gerou (pendentes, nunca
+ *   adiadas, nascidas no próprio mês) são apagadas.
+ *
+ * O mês corrente e os anteriores não são tocados: se uma fatura deles foi
+ * gerada assim, o usuário vê e decide. Função pura para poder ser testada.
+ */
+export function planAutoRecurrenceCleanup(
+  bills: Bill[],
+  today: Date
+): { unmarkIds: number[]; deleteIds: number[] } {
+  const currentIndex = today.getFullYear() * 12 + today.getMonth();
+  const bySeries = new Map<number, Bill[]>();
+  for (const bill of bills) {
+    if (!bill.id || bill.loanId !== undefined) continue;
+    const key = bill.seriesId ?? bill.id;
+    const list = bySeries.get(key) ?? [];
+    list.push(bill);
+    bySeries.set(key, list);
+  }
+
+  const unmarkIds: number[] = [];
+  const deleteIds: number[] = [];
+  for (const series of bySeries.values()) {
+    if (!series.some((b) => b.isMonthly)) continue;
+    const postponedByHand = series.some((b) => (b.postponeHistory ?? []).some((entry) => !entry.auto));
+    if (!postponedByHand) continue;
+
+    for (const bill of series) {
+      if (bill.isMonthly) unmarkIds.push(bill.id as number);
+      const index = bill.year * 12 + (bill.month - 1);
+      const generated =
+        bill.status === 'pending' &&
+        index > currentIndex &&
+        !bill.carriedFromBillId &&
+        (bill.postponeHistory ?? []).length === 0 &&
+        (bill.originMonth ?? bill.month) === bill.month &&
+        (bill.originYear ?? bill.year) === bill.year;
+      if (generated) deleteIds.push(bill.id as number);
+    }
+  }
+  return { unmarkIds, deleteIds };
 }
 
 export const db = new AppDatabase();
@@ -365,7 +440,10 @@ async function pushLocalSnapshotToCloud(allowDuringBootstrap = false): Promise<v
 
   const snapshot = await buildLocalSnapshot();
   lastAppliedCloudUpdatedAt = Math.max(lastAppliedCloudUpdatedAt, snapshot.updatedAt);
-  await setDoc(cloudDocRef, snapshot, { merge: true });
+  // O Firestore recusa o documento inteiro se algum campo for undefined
+  // (campos opcionais deixados em branco: tipo da conta, número de
+  // parcelas…). A ida e volta por JSON remove esses campos.
+  await setDoc(cloudDocRef, JSON.parse(JSON.stringify(snapshot)) as CloudSnapshot, { merge: true });
 }
 
 function scheduleCloudSync(): void {
@@ -657,113 +735,21 @@ export async function ensureMonthlyConfig(month: number, year: number, defaultSa
   return { ...config, id: id as number };
 }
 
-function getPreviousMonthYear(month: number, year: number): { month: number; year: number } {
-  if (month === 1) {
-    return { month: 12, year: year - 1 };
-  }
-  return { month: month - 1, year };
-}
-
-// Auto carry-over only runs when the previous month has already ended.
-// Otherwise, user must manually click "Postergar".
 /**
- * As rotinas que geram contas (faturas do mês, carry-over, juros do
- * agiota) leem o banco, decidem o que falta e só então gravam. Se duas
- * rodarem ao mesmo tempo — o Início e o resumo de atrasos abrem juntos, e o
- * StrictMode do React roda cada efeito duas vezes — as duas veem o mesmo
- * buraco e criam a mesma conta duas vezes. Esta fila faz uma esperar a
- * outra.
+ * As rotinas que geram contas (faturas mensais, juros do agiota) leem o
+ * banco, decidem o que falta e só então gravam. Se duas rodarem ao mesmo
+ * tempo — o Início e o resumo de atrasos abrem juntos, e o StrictMode do
+ * React roda cada efeito duas vezes — as duas veem o mesmo buraco e criam a
+ * mesma conta duas vezes. Esta fila faz uma esperar a outra.
+ *
+ * Não existe mais carry-over automático: uma conta só muda de mês quando o
+ * usuário toca em "Adiar". Sem isso, ela fica no mês dela, vencida.
  */
 let generationChain: Promise<unknown> = Promise.resolve();
 function exclusive<T>(task: () => Promise<T>): Promise<T> {
   const run = generationChain.then(task, task);
   generationChain = run.catch(() => undefined);
   return run;
-}
-
-export function ensureCarryOverBillsForMonth(
-  month: number,
-  year: number,
-  only?: (bill: Bill) => boolean
-): Promise<number> {
-  return exclusive(() => carryOverBillsForMonth(month, year, only));
-}
-
-async function carryOverBillsForMonth(
-  month: number,
-  year: number,
-  only?: (bill: Bill) => boolean
-): Promise<number> {
-  const prev = getPreviousMonthYear(month, year);
-
-  const today = new Date();
-  const currentMonth = today.getMonth() + 1;
-  const currentYear = today.getFullYear();
-  const prevMonthEnded =
-    prev.year < currentYear || (prev.year === currentYear && prev.month < currentMonth);
-
-  if (!prevMonthEnded) return 0;
-
-  const [previousMonthBills, currentMonthBills] = await Promise.all([
-    db.bills
-      .where('[month+year]')
-      .equals([prev.month, prev.year])
-      .and((b) => b.status === 'pending' && (!only || only(b)))
-      .toArray(),
-    db.bills.where('[month+year]').equals([month, year]).toArray(),
-  ]);
-
-  if (previousMonthBills.length === 0) return 0;
-
-  const newCarryOvers: Bill[] = [];
-
-  for (const prevBill of previousMonthBills) {
-    if (!prevBill.id) continue;
-
-    const alreadyCarried = currentMonthBills.some((b) => b.carriedFromBillId === prevBill.id);
-    if (alreadyCarried) continue;
-
-    const baseDescription = prevBill.originalDescription ?? prevBill.description;
-    const tracking = buildPostponementFields(prevBill, { month, year }, { auto: true });
-    newCarryOvers.push({
-      description: baseDescription,
-      originalDescription: baseDescription,
-      initialValue: prevBill.finalValue,
-      finalValue: prevBill.finalValue,
-      status: 'pending',
-      dueDay: prevBill.dueDay,
-      observation: prevBill.observation,
-      month,
-      year,
-      // A fatura adiada continua pertencendo à mesma série mensal, mas deixa
-      // de gerar novas: quem gera é a ocorrência da competência, não esta.
-      isMonthly: prevBill.isMonthly,
-      ...pickCostFields(prevBill),
-      seriesId: prevBill.seriesId ?? prevBill.id,
-      carriedFromBillId: prevBill.id,
-      carriedFromMonth: prev.month,
-      carriedFromYear: prev.year,
-      ...tracking,
-    });
-  }
-
-  if (newCarryOvers.length === 0) return 0;
-
-  await db.bills.bulkAdd(newCarryOvers);
-
-  // A original precisa sair do mês de origem. Sem isto a mesma dívida ficava
-  // pendente nos dois lugares: junho continuava devendo R$ 150 mesmo depois de
-  // a conta ter sido empurrada para julho, e a soma dos meses contava em
-  // dobro.
-  const movedIds = newCarryOvers
-    .map((b) => b.carriedFromBillId)
-    .filter((id): id is number => typeof id === 'number');
-
-  if (movedIds.length > 0) {
-    await db.bills.bulkUpdate(movedIds.map((key) => ({ key, changes: { status: 'skipped' } })));
-  }
-
-  return newCarryOvers.length;
 }
 
 /** Chave de competência, para comparar meses como texto ordenável. */
@@ -863,7 +849,8 @@ async function monthlyBillOccurrences(month: number, year: number): Promise<numb
       seriesId,
       originMonth: month,
       originYear: year,
-      originalDueDate: buildDueDate(month, year, template.dueDay).toISOString(),
+      dueMonthOffset: template.dueMonthOffset,
+      originalDueDate: buildBillDueDate(month, year, template.dueDay, template.dueMonthOffset).toISOString(),
       postponeHistory: [],
     });
   }
@@ -913,8 +900,11 @@ function getNextMonthYear(month: number, year: number): { month: number; year: n
  * seguinte) precisa herdar — senão a dívida adiada perderia a multa e os
  * juros que o usuário cadastrou e o assistente voltaria aos padrões.
  */
-function pickCostFields(bill: Bill): Pick<Bill, 'category' | 'lateFeePercent' | 'monthlyInterestPercent' | 'loanId'> {
-  const fields: Pick<Bill, 'category' | 'lateFeePercent' | 'monthlyInterestPercent' | 'loanId'> = {};
+function pickCostFields(
+  bill: Bill
+): Pick<Bill, 'category' | 'lateFeePercent' | 'monthlyInterestPercent' | 'loanId' | 'dueMonthOffset'> {
+  const fields: Pick<Bill, 'category' | 'lateFeePercent' | 'monthlyInterestPercent' | 'loanId' | 'dueMonthOffset'> = {};
+  if (bill.dueMonthOffset) fields.dueMonthOffset = bill.dueMonthOffset;
   // Juros de agiota adiados continuam sendo daquele empréstimo.
   if (bill.loanId !== undefined) fields.loanId = bill.loanId;
   if (bill.category) fields.category = bill.category;
@@ -949,7 +939,7 @@ function buildPostponementFields(
   const at = options.at ?? new Date();
   const originMonth = source.originMonth ?? source.month;
   const originYear = source.originYear ?? source.year;
-  const missedDueDate = buildDueDate(source.month, source.year, source.dueDay);
+  const missedDueDate = buildBillDueDate(source.month, source.year, source.dueDay, source.dueMonthOffset);
 
   const entry: PostponeRecord = {
     fromMonth: source.month,
@@ -965,7 +955,8 @@ function buildPostponementFields(
     originMonth,
     originYear,
     originalDueDate:
-      source.originalDueDate ?? buildDueDate(originMonth, originYear, source.dueDay).toISOString(),
+      source.originalDueDate ??
+      buildBillDueDate(originMonth, originYear, source.dueDay, source.dueMonthOffset).toISOString(),
     postponedAt: entry.postponedAt,
     postponeHistory: [...(source.postponeHistory ?? []), entry],
   };
@@ -989,7 +980,7 @@ function getInstallmentNumberForDate(
 
 function getInstallmentNumberForDebtMonth(debt: RecurringDebt, month: number, year: number): number | null {
   const installmentNumber = getInstallmentNumberForDate(debt.startMonth, debt.startYear, month, year);
-  if (installmentNumber < 1 || installmentNumber > debt.totalInstallments) {
+  if (installmentNumber < 1 || installmentNumber > installmentLimit(debt)) {
     return null;
   }
   return installmentNumber;
@@ -1070,7 +1061,7 @@ async function syncRecurringDebtFromBillStatus(
   }
 
   const hasPaidChanged = nextPaidInstallments !== debt.paidInstallments;
-  const nextIsActive = nextPaidInstallments < debt.totalInstallments;
+  const nextIsActive = nextPaidInstallments < installmentLimit(debt);
   const hasActiveChanged = debt.isActive !== nextIsActive;
 
   if (hasPaidChanged || hasActiveChanged) {
@@ -1100,8 +1091,8 @@ export async function updateRecurringDebtPaidInstallmentsWithSync(
   const debt = await db.recurringDebts.get(debtId);
   if (!debt || !debt.id) return;
 
-  const boundedPaid = Math.max(0, Math.min(nextPaidInstallments, debt.totalInstallments));
-  const nextIsActive = boundedPaid < debt.totalInstallments;
+  const boundedPaid = Math.max(0, Math.min(nextPaidInstallments, installmentLimit(debt)));
+  const nextIsActive = boundedPaid < installmentLimit(debt);
 
   if (boundedPaid !== debt.paidInstallments || debt.isActive !== nextIsActive) {
     await db.recurringDebts.update(debt.id, {
@@ -1149,17 +1140,10 @@ export async function skipBillToNextMonth(bill: Bill): Promise<void> {
   // Mark original as skipped
   await updateBillStatusWithSync(bill.id, 'skipped');
 
-  // Adiar é assumir que esta conta volta no mês seguinte: a competência de
-  // destino passa a gerar a própria fatura, e a adiada se soma a ela em vez de
-  // ocupar o lugar dela. É isso que faz três adiamentos virarem três dívidas
-  // individuais, cada uma com o vencimento que ficou para trás.
-  //
-  // Se a conta for mesmo avulsa, basta desmarcar "repete todo mês" na edição
-  // que ela para de gerar novas.
-  // Juros de agiota já são gerados todo mês pelo empréstimo.
-  if (!bill.isMonthly && bill.loanId === undefined) {
-    await setBillSeriesMonthly(bill.seriesId ?? bill.id, true);
-  }
+  // Adiar move só esta dívida, só para o mês seguinte. Não liga a repetição
+  // mensal: antes, adiar marcava a conta como "repete todo mês" e ela
+  // passava a aparecer em todos os meses dali em diante. Repetir é uma
+  // escolha do usuário, feita no formulário da conta.
 }
 
 /**
@@ -1206,7 +1190,7 @@ export async function skipRecurringToNextMonth(
 
   // Create a skipped bill for the current month (so it appears as "adiado")
   const skippedBill: Bill = {
-    description: `${debt.description} (${installmentNumber}/${debt.totalInstallments})`,
+    description: `${debt.description} (${installmentFraction(debt, installmentNumber)})`,
     originalDescription: debt.description,
     initialValue: debt.installmentValue,
     finalValue: debt.installmentValue,
@@ -1225,7 +1209,7 @@ export async function skipRecurringToNextMonth(
 
   // Create a pending bill for next month as carry-over
   const tracking = buildPostponementFields({ ...skippedBill, id: skippedBillId as number }, next);
-  const carryDescription = `Parcela de ${debt.description} - ${getMonthName(month)} (${installmentNumber}/${debt.totalInstallments})`;
+  const carryDescription = `Parcela de ${debt.description} - ${getMonthName(month)} (${installmentFraction(debt, installmentNumber)})`;
 
   await db.bills.add({
     description: carryDescription,
@@ -1370,10 +1354,9 @@ export function loanMonthlyInterest(loan: Pick<InformalLoan, 'principal' | 'mont
  * competência de origem): os juros de setembro adiados para outubro
  * continuam sendo os de setembro, e setembro não gera outros.
  *
- * Quando o empréstimo é lançado com data retroativa, os meses que já
- * passaram ganham as cobranças deles e as que estão em aberto são trazidas
- * mês a mês até hoje — como teria acontecido se o app tivesse sido aberto
- * em cada mês. Só as cobranças do agiota andam; as outras contas não.
+ * Quando o empréstimo é lançado com data retroativa, cada mês que já passou
+ * ganha a cobrança dele e ela fica lá, vencida, até ser paga ou adiada —
+ * como qualquer outra conta.
  */
 export function ensureLoanInterestBills(month: number, year: number): Promise<number> {
   return exclusive(() => loanInterestBills(month, year));
@@ -1384,8 +1367,6 @@ async function loanInterestBills(month: number, year: number): Promise<number> {
   if (loans.length === 0) return 0;
 
   const target = monthIndex(month, year);
-  const today = new Date();
-  const current = monthIndex(today.getMonth() + 1, today.getFullYear());
   const created: Bill[] = [];
 
   for (const loan of loans) {
@@ -1432,18 +1413,6 @@ async function loanInterestBills(month: number, year: number): Promise<number> {
 
   if (created.length === 0) return 0;
   await db.bills.bulkAdd(created);
-
-  // Atraso retroativo: leva as cobranças em aberto de meses que já
-  // terminaram até o mês corrente, uma competência por vez.
-  const pastIndexes = created
-    .map((b) => monthIndex(b.month, b.year))
-    .filter((index) => index < current);
-  if (pastIndexes.length > 0) {
-    for (let index = Math.min(...pastIndexes) + 1; index <= current; index++) {
-      const when = fromMonthIndex(index);
-      await carryOverBillsForMonth(when.month, when.year, (b) => b.loanId !== undefined);
-    }
-  }
 
   markLocalChanged();
   scheduleCloudSync();
@@ -1560,4 +1529,33 @@ export async function deleteInformalLoan(loanId: number): Promise<void> {
   await db.loans.delete(loanId);
   markLocalChanged();
   scheduleCloudSync();
+}
+
+/* --- Dívida sem número de parcelas ----------------------------------- */
+
+/**
+ * Encerra uma dívida sem número de parcelas: não haverá parcelas novas.
+ * As que já venceram e não foram pagas continuam devidas — o total passa a
+ * ser a última parcela vencida, e a dívida fica ativa até elas serem pagas.
+ */
+export async function finishOpenEndedDebt(debtId: number): Promise<void> {
+  const debt = await db.recurringDebts.get(debtId);
+  if (!debt) return;
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const currentNumber =
+    (today.getFullYear() - debt.startYear) * 12 + (today.getMonth() + 1 - debt.startMonth) + 1;
+  const currentDue = buildDueDate(today.getMonth() + 1, today.getFullYear(), debt.dueDay);
+  const lastDue = Math.max(0, currentDue <= todayStart ? currentNumber : currentNumber - 1);
+  const total = Math.max(debt.paidInstallments, lastDue);
+
+  await db.recurringDebts.update(debtId, {
+    totalInstallments: total,
+    isActive: debt.paidInstallments < total,
+  });
+}
+
+/** Desfaz o encerramento: a dívida volta a cobrar todo mês. */
+export async function reopenOpenEndedDebt(debtId: number): Promise<void> {
+  await db.recurringDebts.update(debtId, { totalInstallments: undefined, isActive: true });
 }

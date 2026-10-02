@@ -5,13 +5,12 @@ import { useFinancialSnapshot } from '../advisor/useFinancialSnapshot';
 import {
   db,
   getOrCreateSettings,
-  ensureCarryOverBillsForMonth,
   ensureMonthlyBillOccurrences,
   ensureLoanInterestBills,
   ensureMonthlyConfig,
 } from '../db/database';
 import { formatCurrency, formatDate } from '../utils/formatters';
-import { getInstallmentsForMonth, getPostponeStatus } from '../utils/bills';
+import { getInstallmentsForMonth, getPostponeStatus, installmentFraction } from '../utils/bills';
 import { useMonthNavigation } from '../hooks/useMonthNavigation';
 import { MonthSelector } from '../components/MonthSelector';
 import { useEffect, useState, useMemo } from 'react';
@@ -68,11 +67,9 @@ export function Dashboard() {
 
   useEffect(() => {
     (async () => {
-      // Mesma ordem da tela de Contas, senão os totais das duas divergem:
-      // primeiro as faturas do próprio mês, depois o que ficou para trás.
+      // Mesma preparação da tela de Contas, senão os totais das duas divergem.
       await ensureLoanInterestBills(month, year);
       await ensureMonthlyBillOccurrences(month, year);
-      await ensureCarryOverBillsForMonth(month, year);
       const settings = await getOrCreateSettings();
       const config = await ensureMonthlyConfig(month, year, settings.defaultSalary);
       setSalary(config.salary);
@@ -118,7 +115,7 @@ export function Dashboard() {
           dueDate: entry.dueDate,
           status: entry.status,
           type: 'recurring',
-          installmentInfo: `${entry.installmentNumber}/${d.totalInstallments}`,
+          installmentInfo: installmentFraction(d, entry.installmentNumber),
           postponedTimes: 0,
           overdueLabel: entry.overdueLabel,
         });

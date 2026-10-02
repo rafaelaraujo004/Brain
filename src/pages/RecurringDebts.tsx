@@ -1,8 +1,15 @@
 import { useState, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Plus, Search, CircleDollarSign } from 'lucide-react';
-import { db, updateRecurringDebtPaidInstallmentsWithSync } from '../db/database';
+import {
+  db,
+  finishOpenEndedDebt,
+  reopenOpenEndedDebt,
+  updateRecurringDebtPaidInstallmentsWithSync,
+} from '../db/database';
+import { useToast } from '../components/Toast';
 import type { RecurringDebt } from '../types';
+import { installmentLimit } from '../utils/bills';
 import { HelpButton } from '../components/HelpModal';
 import { ListSkeleton } from '../components/PageSpinner';
 import { DebtCard } from '../components/debts/DebtCard';
@@ -12,6 +19,7 @@ export function RecurringDebts() {
   const [showForm, setShowForm] = useState(false);
   const [editingDebt, setEditingDebt] = useState<RecurringDebt | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const { showToast } = useToast();
 
   const debts = useLiveQuery(() => db.recurringDebts.toArray());
   const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -45,8 +53,18 @@ export function RecurringDebts() {
   };
 
   const incrementPaid = async (debt: RecurringDebt) => {
-    const newPaid = Math.min(debt.paidInstallments + 1, debt.totalInstallments);
+    const newPaid = Math.min(debt.paidInstallments + 1, installmentLimit(debt));
     await updateRecurringDebtPaidInstallmentsWithSync(debt.id!, newPaid);
+  };
+
+  const finishDebt = async (debt: RecurringDebt) => {
+    if (!debt.id) return;
+    await finishOpenEndedDebt(debt.id);
+    showToast({
+      message: `"${debt.description}" encerrada. Não haverá parcelas novas.`,
+      actionLabel: 'Desfazer',
+      onAction: () => reopenOpenEndedDebt(debt.id as number),
+    });
   };
 
   const decrementPaid = async (debt: RecurringDebt) => {
@@ -109,6 +127,7 @@ export function RecurringDebts() {
                 setShowForm(true);
               }}
               onDelete={() => deleteDebt(debt.id!)}
+              onFinish={() => finishDebt(debt)}
             />
           ))}
           </div>
@@ -134,6 +153,7 @@ export function RecurringDebts() {
                 setShowForm(true);
               }}
               onDelete={() => deleteDebt(debt.id!)}
+              onFinish={() => finishDebt(debt)}
             />
           ))}
           </div>

@@ -1,16 +1,25 @@
 import { useState } from 'react';
-import { Trash2, Edit3, Calendar, Minus, Plus } from 'lucide-react';
-import { formatCurrency, formatDate, getMonthName, calculateEndDate } from '../../utils/formatters';
-import { getRecurringBacklog } from '../../utils/bills';
+import { Trash2, Edit3, Calendar, Minus, Plus, Infinity as InfinityIcon, Flag } from 'lucide-react';
+import { buildDueDate, formatCurrency, formatDate, getMonthName, calculateEndDate } from '../../utils/formatters';
+import { getRecurringBacklog, installmentFraction, isOpenEnded } from '../../utils/bills';
 import type { RecurringDebt } from '../../types';
+
+/** Data da próxima parcela a pagar (a seguinte às já pagas). */
+export function nextDueDate(debt: RecurringDebt): Date {
+  const index = debt.startYear * 12 + (debt.startMonth - 1) + debt.paidInstallments;
+  return buildDueDate((index % 12) + 1, Math.floor(index / 12), debt.dueDay);
+}
 
 /**
  * Cartão de uma dívida parcelada.
  *
- * O que importa aqui é a distância até o fim: quantas parcelas faltam, quanto
- * ainda falta pagar e em que mês acaba. O progresso é o elemento central, com
- * marcas por parcela quando são poucas — em 12 parcelas dá para contar as
- * marcas; em 60, vira uma barra contínua.
+ * Com número de parcelas, o que importa é a distância até o fim: quantas
+ * faltam, quanto falta pagar e em que mês acaba — as marcas por parcela
+ * aparecem quando são poucas (em 12 dá para contar; em 60, vira barra).
+ *
+ * Sem número de parcelas, a dívida cobra todo mês até ser encerrada. Não há
+ * "quanto falta", então o cartão mostra o que já foi pago e o próximo
+ * vencimento, e oferece encerrar.
  */
 export function DebtCard({
   debt,
@@ -18,21 +27,27 @@ export function DebtCard({
   onDecrement,
   onEdit,
   onDelete,
+  onFinish,
 }: {
   debt: RecurringDebt;
   onIncrement: () => void;
   onDecrement: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  /** Encerrar uma dívida sem número de parcelas */
+  onFinish: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  const remaining = debt.totalInstallments - debt.paidInstallments;
-  const progressPercent = (debt.paidInstallments / debt.totalInstallments) * 100;
-  const totalValue = debt.installmentValue * debt.totalInstallments;
+  const openEnded = isOpenEnded(debt);
+  const total = debt.totalInstallments ?? 0;
+  const remaining = openEnded ? Infinity : total - debt.paidInstallments;
+  const progressPercent = openEnded || total === 0 ? 0 : (debt.paidInstallments / total) * 100;
+  const totalValue = debt.installmentValue * total;
   const paidValue = debt.installmentValue * debt.paidInstallments;
   const remainingValue = totalValue - paidValue;
-  const endDate = calculateEndDate(debt.startMonth, debt.startYear, debt.totalInstallments);
+  const endDate = openEnded ? null : calculateEndDate(debt.startMonth, debt.startYear, total);
+  const nextDue = debt.isActive ? nextDueDate(debt) : null;
 
   // Mesma regra da aba Contas: atrasada é a parcela cujo vencimento já
   // passou. A do mês que ainda não venceu não entra na conta.
@@ -46,7 +61,7 @@ export function DebtCard({
     : 'var(--color-primary)';
 
   // Marcas por parcela só quando dá para distinguir a olho.
-  const showTicks = debt.totalInstallments <= 24;
+  const showTicks = !openEnded && total <= 24;
 
   return (
     <div
@@ -57,7 +72,13 @@ export function DebtCard({
         <div className="flex-1 min-w-0">
           <p className="font-bold truncate tracking-tight">{debt.description}</p>
           <p className="text-xs text-[var(--color-text-secondary)] mt-0.5 tnum">
-            {formatCurrency(debt.installmentValue)}/mês · dia {debt.dueDay}
+            {formatCurrency(debt.installmentValue)}/mês
+            {nextDue && (
+              <>
+                {' '}· próximo vencimento{' '}
+                <span className="font-semibold text-[var(--color-text)]">{formatDate(nextDue)}</span>
+              </>
+            )}
           </p>
         </div>
         <div className="flex-shrink-0">
@@ -67,61 +88,73 @@ export function DebtCard({
             </span>
           ) : !debt.isActive ? (
             <span className="badge-paid">Quitada</span>
+          ) : openEnded ? (
+            <span className="badge-pending">sem prazo</span>
           ) : (
-            <span className="badge-pending">
-              faltam {remaining}
-            </span>
+            <span className="badge-pending">faltam {remaining}</span>
           )}
         </div>
       </div>
 
       {/* --- Progresso ---------------------------------------------------- */}
-      <div className="mt-4">
-        <div className="flex justify-between items-baseline mb-1.5">
-          <span className="text-xs font-semibold tnum">
-            <span style={{ color: accent }}>{debt.paidInstallments}</span>
-            <span className="text-[var(--color-text-tertiary)]">/{debt.totalInstallments}</span>
-            <span className="text-[var(--color-text-tertiary)] font-normal"> parcelas</span>
+      {openEnded ? (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl px-3 py-2.5 bg-[var(--color-surface-2)]">
+          <span className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+            <InfinityIcon size={15} className="text-[var(--color-primary)] flex-shrink-0" />
+            Sem número de parcelas — cobra todo mês até você encerrar
           </span>
-          <span className="text-xs font-bold tnum" style={{ color: accent }}>
-            {Math.round(progressPercent)}%
-          </span>
+          <span className="text-xs font-bold tnum flex-shrink-0">{debt.paidInstallments} pagas</span>
         </div>
-
-        {showTicks ? (
-          <div className="flex gap-[3px]">
-            {Array.from({ length: debt.totalInstallments }).map((_, i) => (
-              <div
-                key={i}
-                className="h-2 flex-1 rounded-full transition-colors duration-300"
-                style={{
-                  background: i < debt.paidInstallments ? accent : 'var(--color-surface-2)',
-                }}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="meter !h-2">
-            <div
-              className="h-full rounded-full"
-              style={{ width: `${progressPercent}%`, background: accent }}
-            />
-          </div>
-        )}
-
-        <div className="flex justify-between items-baseline mt-2">
-          <span className="text-[11px] text-[var(--color-text-tertiary)]">
-            falta{' '}
-            <span className="font-bold text-[var(--color-text)] tnum">
-              {formatCurrency(remainingValue)}
+      ) : (
+        <div className="mt-4">
+          <div className="flex justify-between items-baseline mb-1.5">
+            <span className="text-xs font-semibold tnum">
+              <span style={{ color: accent }}>{debt.paidInstallments}</span>
+              <span className="text-[var(--color-text-tertiary)]">/{total}</span>
+              <span className="text-[var(--color-text-tertiary)] font-normal"> parcelas</span>
             </span>
-          </span>
-          <span className="text-[11px] text-[var(--color-text-tertiary)] flex items-center gap-1">
-            <Calendar size={10} />
-            até {getMonthName(endDate.month).slice(0, 3)}/{endDate.year}
-          </span>
+            <span className="text-xs font-bold tnum" style={{ color: accent }}>
+              {Math.round(progressPercent)}%
+            </span>
+          </div>
+
+          {showTicks ? (
+            <div className="flex gap-[3px]">
+              {Array.from({ length: total }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-2 flex-1 rounded-full transition-colors duration-300"
+                  style={{
+                    background: i < debt.paidInstallments ? accent : 'var(--color-surface-2)',
+                  }}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="meter !h-2">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${progressPercent}%`, background: accent }}
+              />
+            </div>
+          )}
+
+          <div className="flex justify-between items-baseline mt-2">
+            <span className="text-[11px] text-[var(--color-text-tertiary)]">
+              falta{' '}
+              <span className="font-bold text-[var(--color-text)] tnum">
+                {formatCurrency(remainingValue)}
+              </span>
+            </span>
+            {endDate && (
+              <span className="text-[11px] text-[var(--color-text-tertiary)] flex items-center gap-1">
+                <Calendar size={10} />
+                até {getMonthName(endDate.month).slice(0, 3)}/{endDate.year}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* --- Detalhes e ações --------------------------------------------- */}
       {expanded && (
@@ -131,15 +164,23 @@ export function DebtCard({
         >
           <div className="grid grid-cols-2 gap-2">
             <Detail label="Já pago" value={formatCurrency(paidValue)} tone="var(--color-success)" />
-            <Detail label="Total da dívida" value={formatCurrency(totalValue)} />
+            {openEnded ? (
+              <Detail label="Parcela" value={`${formatCurrency(debt.installmentValue)}/mês`} />
+            ) : (
+              <Detail label="Total da dívida" value={formatCurrency(totalValue)} />
+            )}
             <Detail
-              label="Início"
+              label="Primeira parcela"
               value={`${getMonthName(debt.startMonth).slice(0, 3)}/${debt.startYear}`}
             />
-            <Detail
-              label="Última parcela"
-              value={`${getMonthName(endDate.month).slice(0, 3)}/${endDate.year}`}
-            />
+            {endDate ? (
+              <Detail
+                label="Última parcela"
+                value={`${getMonthName(endDate.month).slice(0, 3)}/${endDate.year}`}
+              />
+            ) : (
+              <Detail label="Última parcela" value="sem prazo" />
+            )}
           </div>
 
           {overdue > 0 && (
@@ -149,7 +190,7 @@ export function DebtCard({
               </p>
               {backlog.overdue.map((entry) => (
                 <p key={entry.installmentNumber} className="text-xs text-[var(--color-text-secondary)] tnum">
-                  Parcela {entry.installmentNumber}/{debt.totalInstallments} ·{' '}
+                  Parcela {installmentFraction(debt, entry.installmentNumber)} ·{' '}
                   <span className="font-semibold text-[var(--color-text)]">{entry.originLabel}</span> · venceu{' '}
                   {formatDate(entry.dueDate)} ({entry.overdueLabel})
                 </p>
@@ -161,7 +202,7 @@ export function DebtCard({
           )}
           {backlog.dueThisMonth && (
             <p className="text-xs text-[var(--color-text-secondary)] tnum">
-              Parcela {backlog.dueThisMonth.installmentNumber}/{debt.totalInstallments} vence em{' '}
+              Parcela {installmentFraction(debt, backlog.dueThisMonth.installmentNumber)} vence em{' '}
               <span className="font-semibold text-[var(--color-text)]">{formatDate(backlog.dueThisMonth.dueDate)}</span>.
             </p>
           )}
@@ -183,9 +224,9 @@ export function DebtCard({
                 >
                   <Minus size={16} />
                 </button>
-                <button onClick={onIncrement} className="btn-primary flex-1 !py-2.5 text-sm flex items-center justify-center gap-1.5">
+                <button onClick={onIncrement} className="btn-primary flex-1 !py-2.5 !px-3 text-sm flex items-center justify-center gap-1.5">
                   <Plus size={16} />
-                  Paguei uma parcela
+                  Paguei 1 parcela
                 </button>
               </>
             )}
@@ -206,6 +247,16 @@ export function DebtCard({
               <Trash2 size={16} />
             </button>
           </div>
+
+          {openEnded && debt.isActive && (
+            <button
+              onClick={onFinish}
+              className="btn-secondary w-full !py-2.5 text-sm flex items-center justify-center gap-2"
+            >
+              <Flag size={15} />
+              Encerrar dívida — não haverá mais parcelas
+            </button>
+          )}
         </div>
       )}
     </div>
